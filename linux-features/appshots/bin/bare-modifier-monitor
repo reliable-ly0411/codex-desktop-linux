@@ -166,8 +166,14 @@ if command -v stdbuf >/dev/null 2>&1; then
 else
     coproc APPSHOT_XINPUT { exec xinput test-xi2 --root 2>/dev/null; }
 fi
-monitor_pid="$APPSHOT_XINPUT_PID"
-event_fd="${APPSHOT_XINPUT[0]}"
+# Bash unsets the coprocess variables if XInput2 exits before we capture them.
+# Treat either missing value as a startup failure instead of triggering nounset.
+monitor_pid="${APPSHOT_XINPUT_PID:-}"
+event_fd="${APPSHOT_XINPUT[0]:-}"
+if [ -z "$monitor_pid" ] || [ -z "$event_fd" ]; then
+    echo "permission-denied"
+    exit 1
+fi
 
 sleep 0.1
 if ! kill -0 "$monitor_pid" >/dev/null 2>&1; then

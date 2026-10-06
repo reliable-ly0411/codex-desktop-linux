@@ -276,38 +276,53 @@ test("bare modifier monitor emits one transition from one XInput2 stream", () =>
   }
 });
 
-test("bare modifier monitor fails before ready when XInput2 exits during startup", () => {
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "appshots-xinput2-startup-"));
-  const binDir = path.join(tempDir, "bin");
-  const helper = path.join(__dirname, "bin", "bare-modifier-monitor");
-  fs.mkdirSync(binDir);
-  fs.writeFileSync(
-    path.join(binDir, "xmodmap"),
-    "#!/bin/sh\nprintf '%s\\n' 'keycode 50 = Shift_L' 'keycode 62 = Shift_R'\n",
-    { mode: 0o755 },
-  );
-  fs.writeFileSync(
-    path.join(binDir, "xinput"),
-    "#!/bin/sh\n[ \"$1 $2\" = \"test-xi2 --root\" ] || exit 2\nexit 2\n",
-    { mode: 0o755 },
-  );
+for (const pauseBefore of [null, "monitor_pid", "event_fd"]) {
+  test(`bare modifier monitor fails before ready when XInput2 exits during startup${pauseBefore ? ` before ${pauseBefore} capture` : ""}`, () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "appshots-xinput2-startup-"));
+    const binDir = path.join(tempDir, "bin");
+    const helper = path.join(__dirname, "bin", "bare-modifier-monitor");
+    fs.mkdirSync(binDir);
+    fs.writeFileSync(
+      path.join(binDir, "xmodmap"),
+      "#!/bin/sh\nprintf '%s\\n' 'keycode 50 = Shift_L' 'keycode 62 = Shift_R'\n",
+      { mode: 0o755 },
+    );
+    fs.writeFileSync(
+      path.join(binDir, "xinput"),
+      "#!/bin/sh\n[ \"$1 $2\" = \"test-xi2 --root\" ] || exit 2\nexit 2\n",
+      { mode: 0o755 },
+    );
 
-  try {
-    const result = spawnSync(helper, ["--key", "DoubleShift", "--immediate"], {
-      encoding: "utf8",
-      env: {
-        ...process.env,
-        DISPLAY: ":99",
-        PATH: `${binDir}:${process.env.PATH}`,
-      },
-      timeout: 2_000,
-    });
-    assert.notEqual(result.status, 0, result.stderr);
-    assert.equal(result.stdout, "permission-denied\n");
-  } finally {
-    fs.rmSync(tempDir, { recursive: true, force: true });
-  }
-});
+    // Model the parent being descheduled while the short-lived coprocess exits.
+    // Bash removes its special PID/FD variables when it reaps that process.
+    const bashEnv = path.join(tempDir, "bash-env");
+    if (pauseBefore) {
+      fs.writeFileSync(bashEnv, [
+        "trap 'if [[ $BASH_COMMAND == " + pauseBefore + "=* && -n ${APPSHOT_XINPUT_PID:-}${monitor_pid:-} ]]; then sleep 0.1; fi' DEBUG",
+        "",
+      ].join("\n"));
+    }
+
+    try {
+      const result = spawnSync(helper, ["--key", "DoubleShift", "--immediate"], {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          DISPLAY: ":99",
+          PATH: `${binDir}:${process.env.PATH}`,
+          ...(pauseBefore ? { BASH_ENV: bashEnv } : {}),
+        },
+        timeout: 2_000,
+      });
+      assert.ifError(result.error);
+      assert.notEqual(result.status, 0, result.stderr);
+      assert.equal(result.stdout, "permission-denied\n", result.stderr);
+      assert.doesNotMatch(result.stderr, /unbound variable|bad file descriptor/i);
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+}
 
 test("enables AppShots availability atom on Linux", () => {
   const patched = applyPatchTwice(

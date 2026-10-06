@@ -14,6 +14,8 @@ concurrency:
 
 jobs:
   populate:
+    # This cache belongs to upstream; forks do not have its publishing token.
+    if: github.repository == 'ilysenko/codex-desktop-linux'
     strategy:
       fail-fast: false
       matrix:
