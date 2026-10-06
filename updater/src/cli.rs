@@ -15,6 +15,12 @@ pub struct Cli {
 pub enum Commands {
     Daemon,
     CheckNow,
+    /// Remove obsolete updater artifacts, retaining recorded packages and one rollback.
+    CleanCache {
+        /// Report planned removals without deleting files.
+        #[arg(long)]
+        dry_run: bool,
+    },
     Status {
         #[arg(long)]
         json: bool,

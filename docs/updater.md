@@ -68,6 +68,8 @@ codex-update-manager diagnose --json
 codex-update-manager check-now
 codex-update-manager install-ready
 codex-update-manager rollback
+codex-update-manager clean-cache --dry-run
+codex-update-manager clean-cache
 ```
 
 - `status` shows the persisted candidate, installed, and rollback state.
@@ -116,6 +118,43 @@ The authoritative service log is the user journal:
 journalctl --user -u codex-update-manager.service -n 200 --no-pager
 journalctl --user -u codex-update-manager.service -f
 ```
+
+## Automatic cache cleanup
+
+Cleanup is built into the updater and holds the same `check.lock` as download,
+build, install and rollback. It runs after a completed build or installation,
+on daemon startup after transaction recovery, and on an independent six-hour
+timer. Failed network checks do not disable cleanup. It never installs packages
+or closes the application. The active updater binary is included in subsequent
+native update packages, so this policy travels with managed updates.
+
+The retained set comes from persisted package paths, not filesystem dates:
+current/candidate native package, its upstream input, and the one recorded
+rollback package. A failed or incomplete candidate's whole workspace is kept.
+For completed builds, only retained packages and recent logs/reports remain;
+`builder`, `codex-app`, `tmp` and unreferenced `dist` artifacts are removed.
+Logs and reports expire after seven days. Unreferenced prefetched `chatgpt-*.deb`
+inputs younger than 24 hours are left for the next signed metadata check;
+normal prebuild pruning runs only after pinning the verified input in state.
+Empty workspace shells and unrecognized files can remain; this avoids claiming
+ownership of user-authored material.
+
+`clean-cache --dry-run` returns a JSON plan and allocated-byte estimate without
+removing files. `clean-cache` uses the same plan and validates retained native
+package versions and the upstream SHA-256 before deleting. It hashes retained
+files before and after, leaves update state untouched, and writes the latest
+report to `cache-cleanup-last.json` in the updater state directory. Actual
+removals and failures are recorded in `service.log`. Estimated bytes may differ
+from recovered disk space for hard-linked files.
+
+Cleanup is conservative: unknown/missing retained packages, custom workspace
+roots outside the default cache root, active/interrupted build or install
+states, and manual-recovery barriers stop cleanup. Symlinked roots and retained
+artifacts are rejected. Targets containing mount points or readable process
+references (open files, executable, working directory, mappings) are skipped.
+Nested symlinks are never followed. An interrupted cleanup can be rerun; it does
+not rotate backup state or remove a referenced package. Newly successful update
+state determines which single previous version remains the rollback target.
 
 ## Manual-update packages
 

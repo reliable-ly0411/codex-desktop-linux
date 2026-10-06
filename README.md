@@ -342,7 +342,18 @@ codex-update-manager check-now
 codex-update-manager diagnose
 codex-update-manager install-ready
 codex-update-manager rollback
+codex-update-manager clean-cache --dry-run
+codex-update-manager clean-cache
 ```
+
+Cache cleanup runs after a successful build/install, at service startup, and
+every six hours independently of network checks. It keeps the recorded current
+package, upstream input and one rollback package; pending or failed candidates
+remain protected. Build intermediates are removed and diagnostics expire after
+seven days. A newly prefetched upstream package has a 24-hour grace period.
+`clean-cache --dry-run` prints a JSON preview; `clean-cache` applies the same
+policy under the updater lock. The latest result is saved to
+`~/.local/state/codex-update-manager/cache-cleanup-last.json`.
 
 ```bash
 systemctl --user enable --now codex-update-manager.service

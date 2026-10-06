@@ -314,7 +314,15 @@ codex-update-manager check-now
 codex-update-manager diagnose
 codex-update-manager install-ready
 codex-update-manager rollback
+codex-update-manager clean-cache --dry-run
+codex-update-manager clean-cache
 ```
+
+缓存清理在构建/安装成功、服务启动后和每六小时自动执行，不依赖联网检查成功。
+保留当前安装包、上游输入包和唯一回退包；待安装或失败候选仍受保护。
+构建中间文件自动删除，诊断日志保留七天；新预下载的上游包有 24 小时宽限期。
+`clean-cache --dry-run` 输出 JSON 预览，`clean-cache` 在更新锁保护下执行清理。
+最近一次结果写入 `~/.local/state/codex-update-manager/cache-cleanup-last.json`。
 
 ```bash
 systemctl --user enable --now codex-update-manager.service

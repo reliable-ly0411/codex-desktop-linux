@@ -30,6 +30,20 @@ pub async fn run(cli: Cli) -> Result<()> {
     let config = RuntimeConfig::load_or_default(&paths)?;
 
     match cli.command {
+        Commands::CleanCache { dry_run } => {
+            let _lock = MutationLock::try_acquire(&paths.state_dir.join("check.lock"))?
+                .context("Another updater mutation is active; cache cleanup skipped")?;
+            let state = PersistedState::load_or_default(
+                &paths.state_file,
+                config.auto_install_on_app_exit,
+            )?;
+            let report = cache_cleanup::clean(&config, &paths, &state, !dry_run)?;
+            if !dry_run {
+                record_cleanup(&paths, &report)?;
+            }
+            println!("{}", serde_json::to_string_pretty(&report)?);
+            Ok(())
+        }
         Commands::Daemon => {
             let mut state = PersistedState::load_or_default(
                 &paths.state_file,
@@ -53,6 +67,7 @@ pub async fn run(cli: Cli) -> Result<()> {
                 );
                 return Ok(());
             }
+            cleanup_cache(&config, &paths, &state);
             check(&config, &mut state, &paths, false, true).await
         }
         Commands::Status { json } => {
@@ -101,7 +116,9 @@ pub async fn run(cli: Cli) -> Result<()> {
                 println!("A package transaction is still active; refusing to start rollback.");
                 return Ok(());
             }
-            rollback::run(&config, &mut state, &paths).await
+            rollback::run(&config, &mut state, &paths).await?;
+            cleanup_cache(&config, &paths, &state);
+            Ok(())
         }
         Commands::InstallDeb { .. }
         | Commands::InstallRpm { .. }
@@ -132,6 +149,7 @@ async fn daemon(
     time::sleep(config.initial_check_delay_duration()).await;
     if let Some(_lock) = MutationLock::try_acquire(&paths.state_dir.join("check.lock"))? {
         if daemon_replacement_gate(config, state, paths)? {
+            cleanup_cache(config, paths, state);
             if let Err(error) = check(config, state, paths, true, false).await {
                 error!(?error, "initial update check failed");
             }
@@ -141,10 +159,19 @@ async fn daemon(
     }
     let mut checks = time::interval(config.check_interval_duration());
     let mut reconcile = time::interval(Duration::from_secs(15));
+    let mut cleanups = time::interval(Duration::from_secs(6 * 3600));
     checks.tick().await;
     reconcile.tick().await;
+    cleanups.tick().await;
     loop {
         tokio::select! {
+            _ = cleanups.tick() => {
+                if let Some(_lock) = MutationLock::try_acquire(&paths.state_dir.join("check.lock"))? {
+                    if daemon_replacement_gate(config, state, paths)? {
+                        cleanup_cache(config, paths, state);
+                    }
+                }
+            },
             _ = checks.tick() => {
                 if let Some(_lock) = MutationLock::try_acquire(&paths.state_dir.join("check.lock"))? {
                     if daemon_replacement_gate(config, state, paths)? {
@@ -167,6 +194,23 @@ async fn daemon(
         }
     }
     Ok(())
+}
+
+fn record_cleanup(paths: &RuntimePaths, report: &cache_cleanup::CleanupReport) -> Result<()> {
+    let text = serde_json::to_string_pretty(report)?;
+    let staging = paths.state_dir.join("cache-cleanup-last.json.tmp");
+    fs::write(&staging, format!("{text}\n"))?;
+    fs::rename(staging, paths.state_dir.join("cache-cleanup-last.json"))?;
+    info!(removed_bytes = report.removed_bytes, removed = report.removed.len(), skipped = ?report.skipped, "updater cache cleanup completed");
+    Ok(())
+}
+
+fn cleanup_cache(config: &RuntimeConfig, paths: &RuntimePaths, state: &PersistedState) {
+    if let Err(error) = cache_cleanup::clean(config, paths, state, true)
+        .and_then(|report| record_cleanup(paths, &report))
+    {
+        warn!(%error, "updater cache cleanup skipped or incomplete");
+    }
 }
 
 async fn reconcile_pending_install(
@@ -469,7 +513,6 @@ async fn check(
         Err(error) => return fail_check(config, state, paths, previous_state.clone(), error),
     };
     state.last_successful_check_at = Some(Utc::now());
-    let _ = cache_cleanup::prune(&paths.cache_dir, state);
 
     let same_failed_candidate = previous_status == UpdateStatus::Failed
         && previous_sha256.as_deref() == Some(metadata.sha256.as_str());
@@ -536,11 +579,18 @@ async fn check(
         Err(error) => return fail_update(config, state, paths, &previous_state, error),
     };
     state.artifact_paths.upstream_package_path = Some(upstream_package.clone());
+    // Pin the verified candidate before pruning: a content-addressed package
+    // prefetched for this update must survive long enough to be reused.
+    if let Err(error) = cache_cleanup::prune(&paths.cache_dir, state) {
+        warn!(%error, "upstream package cache cleanup skipped");
+    }
     if let Err(error) =
         builder::build_update(config, state, paths, &metadata.version, &upstream_package).await
     {
         return fail_update(config, state, paths, &previous_state, error);
     }
+
+    cleanup_cache(config, paths, state);
 
     if config.notifications {
         let _ = notify::send(
@@ -794,7 +844,7 @@ async fn install_ready_with_launcher(
     state.clear_install_auth_retry_block();
     state.install_after_app_exit_requested = false;
     state.save_updater(&paths.state_file)?;
-    let _ = cache_cleanup::prune(&paths.cache_dir, state);
+    cleanup_cache(config, paths, state);
     if config.notifications {
         let _ = notify::send(
             "codex-desktop updated",
@@ -989,6 +1039,17 @@ mod replacement_tests {
         thread,
         time::Duration,
     };
+
+    #[test]
+    fn cleanup_uses_the_same_nonblocking_mutation_lock() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let path = temp.path().join("check.lock");
+        let first = MutationLock::try_acquire(&path)?.unwrap();
+        assert!(MutationLock::try_acquire(&path)?.is_none());
+        drop(first);
+        assert!(MutationLock::try_acquire(&path)?.is_some());
+        Ok(())
+    }
 
     #[test]
     fn explicit_check_retries_the_same_failed_candidate() {
