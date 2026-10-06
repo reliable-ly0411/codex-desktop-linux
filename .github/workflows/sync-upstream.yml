@@ -1,4 +1,4 @@
-name: Sync and build Community deb
+name: Sync, build and release Community deb
 run-name: Community deb · ${{ github.event_name }} · ${{ inputs.architecture || 'amd64' }}
 
 'on':
@@ -12,7 +12,7 @@ run-name: Community deb · ${{ github.event_name }} · ${{ inputs.architecture |
         type: boolean
         default: true
       force_rebuild:
-        description: Rebuild even if a downloadable package exists / 强制重建
+        description: Rebuild and publish even if a Release exists / 强制重建
         type: boolean
         default: false
       architecture:
@@ -64,8 +64,7 @@ jobs:
     runs-on: ${{ matrix.architecture == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
     timeout-minutes: 75
     permissions:
-      contents: read
-      actions: read
+      contents: write
     env:
       SOURCE_SHA: ${{ needs.sync.outputs.source_sha }}
       BUILD_ARCH: ${{ matrix.architecture }}
@@ -83,7 +82,7 @@ jobs:
           node-version: 24
       - name: Prepare runner-local build state
         run: echo "BUILD_STATE_DIR=$RUNNER_TEMP/community-build-$BUILD_ARCH" >> "$GITHUB_ENV"
-      - name: Verify signed metadata and check existing successful artifacts
+      - name: Verify signed metadata and check published Releases
         id: plan
         env:
           GH_TOKEN: ${{ github.token }}
@@ -103,7 +102,7 @@ jobs:
         run: |
           cargo test --locked -p codex-update-manager
           cargo clippy --locked -p codex-update-manager --all-targets -- -D warnings
-          node --test scripts/ci/community-build.test.js scripts/lib/upstream-linux-package.test.js linux-features/appshots/test.js
+          node --test scripts/ci/community-build*.test.js scripts/lib/upstream-linux-package.test.js linux-features/appshots/test.js
           bash -n scripts/ci/sync-community-fork.sh scripts/ci/community-build-deb.sh
       - name: Build and verify installable deb with automatic cache cleanup
         if: steps.plan.outputs.build == 'true'
@@ -123,3 +122,8 @@ jobs:
         env:
           ARTIFACT_URL: ${{ steps.artifact.outputs.artifact-url }}
         run: printf '\n[Download verified package / 下载安装包](%s)\n' "$ARTIFACT_URL" >> "$GITHUB_STEP_SUMMARY"
+      - name: Publish verified assets and Chinese notes to Releases
+        if: steps.plan.outputs.build == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/ci/community-build.js publish

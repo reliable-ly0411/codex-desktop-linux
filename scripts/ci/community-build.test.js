@@ -5,16 +5,11 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
-const { identity, chooseArtifact, requireSamePackage } = require("./community-build.js");
+const { identity, requireSamePackage } = require("./community-build.js");
 const source = "a".repeat(40);
 const metadata = { package: "chatgpt", architecture: "amd64", version: "26.930.1",
   repository: "https://persistent.oaistatic.com/codex-app-prod/linux/deb",
   repositoryPath: "pool/chatgpt.deb", sha256: "b".repeat(64), size: 100 };
-const now = Date.parse("2026-10-06T00:00:00Z");
-const artifact = { id: 3, name: "package", expired: false, size_in_bytes: 100,
-  expires_at: "2026-10-20T00:00:00Z", workflow_run: { id: 10 } };
-const success = { status: "completed", conclusion: "success", path: ".github/workflows/sync-upstream.yml" };
-
 test("build identity changes with source, official package, architecture or feature configuration", () => {
   const key = identity(source, metadata, "{}");
   assert.equal(identity(source, { ...metadata, path: "/another/runner/path" }, "{}"), key);
@@ -26,22 +21,6 @@ test("build identity changes with source, official package, architecture or feat
   ]) assert.notEqual(candidate, key);
   assert.throws(() => identity("main", metadata, "{}"));
   assert.throws(() => identity(source, { ...metadata, repository: "https://example.invalid" }, "{}"));
-});
-test("unchanged successful downloadable artifact is reused", () => {
-  assert.equal(chooseArtifact([artifact], "package", false, () => success, now), artifact);
-});
-test("force rebuild never accepts an existing artifact", () => {
-  assert.equal(chooseArtifact([artifact], "package", true, () => { throw Error("must not query"); }, now), null);
-});
-test("expired, missing, empty, failed and wrong-workflow artifacts do not suppress a build", () => {
-  for (const items of [[], [{ ...artifact, expired: true }], [{ ...artifact, size_in_bytes: 0 }],
-    [{ ...artifact, expires_at: "2026-10-01T00:00:00Z" }], [{ ...artifact, name: "other" }]]) {
-    assert.equal(chooseArtifact(items, "package", false, () => success, now), null);
-  }
-  for (const run of [{ ...success, conclusion: "failure" }, { ...success, status: "in_progress" },
-    { ...success, path: ".github/workflows/other.yml" }]) {
-    assert.equal(chooseArtifact([artifact], "package", false, () => run, now), null);
-  }
 });
 test("signed package changes between planning and download stop the build", () => {
   requireSamePackage(metadata, { ...metadata, path: "/download" });

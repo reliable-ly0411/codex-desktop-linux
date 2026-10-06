@@ -374,26 +374,32 @@ updater. Full behavior and recovery steps are documented in
 
 ## Build from the GitHub website
 
-In this fork, open **Actions → Sync and build Community deb → Run workflow**
+In this fork, open **Actions → Sync, build and release Community deb → Run workflow**
 on `main`. The default synchronizes upstream and builds an **amd64 Debian package**.
 You may disable synchronization, select `arm64`/`both`, or request a forced rebuild.
 The same workflow checks every six hours (02:23, 08:23, 14:23 and 20:23 Asia/Shanghai;
 GitHub schedules may be delayed). Merge conflicts stop the build without overwriting
 fork commits.
 
-A successful build provides a downloadable artifact containing the `.deb`,
-`SHA256SUMS`, `build-info.json` and installation notes. Artifacts last **14 days**;
-GitHub sign-in is required to download them. An unchanged source commit, signed
-upstream package and feature configuration reuse a still-available artifact from
-a successful run. Missing/expired artifacts are rebuilt. A source or upstream
-package change also rebuilds, even if only one of those inputs changed.
+A changed source commit, signed official package, architecture or feature configuration
+triggers a build and an automatic **GitHub Release**, with the `.deb`, `SHA256SUMS`,
+`build-info.json` and installation notes. Chinese release notes include installation,
+cleanup and source verification details. Each architecture gets its own version tag.
+A complete published Release with the same inputs skips the build; Actions artifact
+expiry alone does not rebuild. A forced run builds and publishes a new package version.
+
+Assets are uploaded to a draft and their remote SHA-256 values are checked before
+publication. An interrupted upload stays a draft; the next run can build again.
+Published assets are never overwritten. Build artifacts are also retained for 14 days;
+Release assets are not subject to that expiry. The workflow uses the repository's
+`GITHUB_TOKEN` with `contents: write`, without an additional personal access token.
 
 These packages include the updater with automatic cache cleanup and its service.
 Optional Linux features are disabled in the baseline profile; the package does
 not reproduce a particular machine's enabled features, local patches or proxy.
 The workflow verifies the signed stable package and SHA-256, builds the updater
 from the recorded source commit, and inspects the output package before upload.
-It neither installs the package on your computer nor publishes a GitHub Release.
+It does not install or restart the application on your computer.
 Verify `sha256sum -c SHA256SUMS` before manually installing a downloaded package.
 
 ## Build, package, and run

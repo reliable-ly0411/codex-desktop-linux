@@ -5,6 +5,7 @@ const path = require("node:path");
 const crypto = require("node:crypto");
 const { execFileSync } = require("node:child_process");
 const { resolveOfficialPackage, verifyIndexedFile } = require("../lib/upstream-linux-package.js");
+const { chooseRelease, publish } = require("./community-build-release.js");
 const REPOSITORY = "https://persistent.oaistatic.com/codex-app-prod/linux/deb";
 const digest = (input) => crypto.createHash("sha256").update(input).digest("hex");
 
@@ -18,22 +19,6 @@ function identity(source, metadata, features) {
   return digest(JSON.stringify({ schema: 1, source, architecture: metadata.architecture,
     upstreamSha256: metadata.sha256, version: metadata.version,
     featuresSha256: digest(features), withUpdater: true }));
-}
-
-function reusableArtifact(artifacts, name, now = Date.now()) {
-  return artifacts.filter((a) => a.name === name && !a.expired && a.size_in_bytes > 0
-    && Date.parse(a.expires_at) > now && Number.isSafeInteger(a.workflow_run?.id))
-    .sort((a, b) => b.id - a.id);
-}
-
-function chooseArtifact(artifacts, name, force, getRun, now = Date.now()) {
-  if (force) return null;
-  for (const candidate of reusableArtifact(artifacts, name, now)) {
-    const run = getRun(candidate.workflow_run.id);
-    if (run.status === "completed" && run.conclusion === "success"
-        && run.path === ".github/workflows/sync-upstream.yml") return candidate;
-  }
-  return null;
 }
 
 function requireSamePackage(expected, actual) {
@@ -66,16 +51,20 @@ async function main() {
     const artifactName = `community-deb-${arch}-${key}`;
     const repo = process.env.GITHUB_REPOSITORY;
     const force = process.env.FORCE_REBUILD === "true";
-    const pages = force ? [] : api(`repos/${repo}/actions/artifacts?per_page=100&name=${artifactName}`, true);
-    const previous = chooseArtifact(pages.flatMap((p) => p.artifacts), artifactName, force,
-      (id) => api(`repos/${repo}/actions/runs/${id}`));
+    const pages = force ? [] : api(`repos/${repo}/releases?per_page=100`, true);
+    const previous = chooseRelease(pages.flat(), key, arch, force);
     writeJson(planFile, { source, metadata, key, artifactName, featuresSha256: digest(features) });
     fs.appendFileSync(process.env.GITHUB_OUTPUT, `build=${!previous}\nartifact_name=${artifactName}\n`);
-    summary(`### ${arch}: ${previous ? "Unchanged; reuse package / 无变化，复用安装包" : "Build / 构建"}\n\nOfficial version: \`${metadata.version}\`\n\nSource: \`${source}\`\n\nOfficial SHA-256: \`${metadata.sha256}\``);
-    if (previous) summary(`\n[Existing download / 已有下载](https://github.com/${repo}/actions/runs/${previous.workflow_run.id}/artifacts/${previous.id})`);
+    summary(`### ${arch}: ${previous ? "Unchanged; reuse Release / 无变化，复用已发布版本" : "Build / 构建"}\n\nOfficial version: \`${metadata.version}\`\n\nSource: \`${source}\`\n\nOfficial SHA-256: \`${metadata.sha256}\``);
+    if (previous) summary(`\n[Existing download / 已有下载](${previous.html_url})`);
     return;
   }
   const plan = JSON.parse(fs.readFileSync(planFile, "utf8"));
+  if (command === "publish") {
+    const url = publish(plan);
+    summary(`\n[Release / 发布版本](${url})`);
+    return;
+  }
   if (command === "download") {
     const metadata = await resolveOfficialPackage({ architecture: plan.metadata.architecture,
       repository: REPOSITORY, outputDir: path.join(dir, "download"),
@@ -105,4 +94,4 @@ async function main() {
   throw new Error(`Unknown command: ${command}`);
 }
 if (require.main === module) main().catch((e) => { console.error(e); process.exitCode = 1; });
-module.exports = { identity, reusableArtifact, chooseArtifact, requireSamePackage };
+module.exports = { identity, requireSamePackage };
