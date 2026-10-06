@@ -1,0 +1,49 @@
+name: Sync upstream
+
+'on':
+  schedule:
+    # UTC; Asia/Shanghai: 02:23, 08:23, 14:23, 20:23.
+    - cron: '23 */6 * * *'
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: [.github/workflows/sync-upstream.yml]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sync-upstream-main
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    if: github.repository == 'reliable-ly0411/codex-desktop-linux'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - name: Verify fork parent and merge upstream main
+        shell: bash
+        run: |
+          set -euo pipefail
+          parent=$(gh api "repos/$GH_REPO" --jq '.parent.full_name')
+          if [[ "$parent" != 'ilysenko/codex-desktop-linux' ]]; then
+            echo '::error::Unexpected fork parent; synchronization stopped.'
+            exit 1
+          fi
+          if gh api --method POST "repos/$GH_REPO/merge-upstream" \
+            -H 'Accept: application/vnd.github+json' \
+            -f branch=main > "$RUNNER_TEMP/sync-result.json"; then
+            cat "$RUNNER_TEMP/sync-result.json"
+            {
+              echo '### Upstream synchronization succeeded'
+              echo
+              jq -r '.message' "$RUNNER_TEMP/sync-result.json"
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo '::error::Upstream sync failed. Check merge conflicts and repository permissions. No force push was attempted.'
+            exit 1
+          fi
