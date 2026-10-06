@@ -339,6 +339,22 @@ make install
 
 AppImage 与仓库内生成应用不包含原生包 updater。参阅[更新器](docs/updater.md)。
 
+## 在 GitHub 网页同步并构建
+
+在本 Fork 打开 **Actions → Sync and build Community deb → Run workflow**，选择
+`main` 即可运行。默认先同步上游，再构建 **amd64 的 Debian 安装包**；可关闭同步、
+选择 `arm64`/`both`，或勾选强制重建。每六小时也会自动检查一次（北京时间
+02:23、08:23、14:23、20:23，GitHub 调度可能延迟）。合并冲突会停止构建，不覆盖 Fork 提交。
+
+成功后在任务摘要或 Artifacts 下载，内含 `.deb`、`SHA256SUMS`、`build-info.json`
+和安装说明，**保留 14 天**，下载需要登录 GitHub。源码提交、官方签名包及功能配置
+均未变化时复用成功任务中仍可下载的产物；产物过期、丢失或输入变化会重新构建。
+
+安装包包含自动清理更新缓存的更新器及服务。基础配置默认关闭可选 Linux 功能，
+不复制某台电脑的功能开关、本地补丁或代理。构建会验证官方稳定包签名及哈希，
+从锁定提交编译更新器，并在上传前检查实际安装包。不会自动安装到本机，也不发布
+GitHub Release。手动安装前先执行 `sha256sum -c SHA256SUMS`。
+
 ## 构建、打包与运行
 
 ```bash
