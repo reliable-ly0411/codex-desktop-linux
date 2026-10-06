@@ -70,7 +70,6 @@ jobs:
       SOURCE_SHA: ${{ needs.sync.outputs.source_sha }}
       BUILD_ARCH: ${{ matrix.architecture }}
       FORCE_REBUILD: ${{ inputs.force_rebuild || false }}
-      BUILD_STATE_DIR: ${{ runner.temp }}/community-build-${{ matrix.architecture }}
       CODEX_LINUX_FEATURES_CONFIG: ${{ github.workspace }}/linux-features/features.example.json
       PACKAGE_WITH_UPDATER: '1'
       CARGO_INCREMENTAL: '0'
@@ -82,6 +81,8 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: 24
+      - name: Prepare runner-local build state
+        run: echo "BUILD_STATE_DIR=$RUNNER_TEMP/community-build-$BUILD_ARCH" >> "$GITHUB_ENV"
       - name: Verify signed metadata and check existing successful artifacts
         id: plan
         env:
