@@ -51,7 +51,8 @@ jobs:
         with:
           toolchain: stable
           components: clippy
-      - run: cargo test -p codex-update-manager
+      # Isolate executable-replacement fixtures from parallel process spawns (ETXTBSY).
+      - run: cargo test -p codex-update-manager -- --test-threads=1
       - run: cargo clippy -p codex-update-manager -- -D warnings
       - run: cargo test -p codex-record-replay-linux
       - run: cargo clippy -p codex-record-replay-linux --all-targets -- -D warnings

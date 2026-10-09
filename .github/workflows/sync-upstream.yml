@@ -100,7 +100,8 @@ jobs:
       - name: Check updater and build orchestration
         if: steps.plan.outputs.build == 'true'
         run: |
-          cargo test --locked -p codex-update-manager
+          # Isolate executable-replacement fixtures from parallel process spawns (ETXTBSY).
+          cargo test --locked -p codex-update-manager -- --test-threads=1
           cargo clippy --locked -p codex-update-manager --all-targets -- -D warnings
           node --test scripts/ci/community-build*.test.js scripts/lib/upstream-linux-package.test.js linux-features/appshots/test.js
           bash -n scripts/ci/sync-community-fork.sh scripts/ci/community-build-deb.sh
