@@ -48,6 +48,10 @@ test("computer-use-linux is opt-in and owns the current Linux descriptors", () =
   const visibility = descriptors.find(({ id }) => id === "native-settings-visibility");
   assert.equal(visibility.pattern.test("app-initial-3e128f859aa3.js"), true);
   assert.equal(visibility.pattern.test("app-primary-72206882651c.js"), false);
+  const hostPlatform = descriptors.find(({ id }) => id === "host-platform");
+  assert.equal(hostPlatform.pattern.test("app-initial-currentHash.js"), true);
+  assert.equal(hostPlatform.pattern.test("app-shared-oldHash.js"), true);
+  assert.equal(hostPlatform.pattern.test("app-initial-currentHash.css"), false);
 });
 
 test("computer-use-linux staging consumes release artifacts without invoking Cargo", () => {
@@ -72,7 +76,7 @@ test("staging extends the hidden unified plugin and invalidates the browser-only
   const backend = path.join(workspace, "backend");
   fs.writeFileSync(backend, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
   const env = { ...process.env, SCRIPT_DIR: path.resolve(__dirname, "../.."), INSTALL_DIR: installDir,
-    CODEX_COMPUTER_USE_BINARY_SOURCE: backend, CODEX_COMPUTER_USE_COSMIC_BINARY_SOURCE: backend };
+    CODEX_COMPUTER_USE_BINARY_SOURCE: backend, CODEX_COMPUTER_USE_COSMIC_BINARY_SOURCE: backend, CODEX_COMPUTER_USE_INDICATOR_BINARY_SOURCE: backend };
   const stage = () => execFileSync("bash", [path.join(__dirname, "stage.sh")], { env, stdio: "pipe" });
   const mcpPath = path.join(target, ".mcp.json");
   const originalMcp = fs.readFileSync(mcpPath, "utf8");
@@ -92,8 +96,9 @@ test("staging extends the hidden unified plugin and invalidates the browser-only
   }
   fs.writeFileSync(mcpPath, originalMcp);
   stage();
+  assert.ok(fs.existsSync(path.join(target, "bin/codex-computer-use-indicator")));
   const version = JSON.parse(fs.readFileSync(path.join(target, ".codex-plugin/plugin.json"))).version;
-  assert.equal(version, "26.908.31748-linux-native.7");
+  assert.equal(version, "26.908.31748-linux-native.8");
   assert.deepEqual(JSON.parse(fs.readFileSync(marketplacePath)).plugins.map(p => p.name), ["unified-computer-use", "browser", "computer-use"]);
   const settingsManifest = JSON.parse(fs.readFileSync(path.join(target, "../computer-use/.codex-plugin/plugin.json")));
   assert.equal(settingsManifest.mcpServers, undefined);
@@ -114,9 +119,9 @@ test("staging extends the hidden unified plugin and invalidates the browser-only
   previousManifest.version = "26.901.41600-linux-native.1";
   fs.writeFileSync(manifestPath, JSON.stringify(previousManifest));
   stage();
-  assert.equal(JSON.parse(fs.readFileSync(manifestPath)).version, "26.901.41600-linux-native.7");
+  assert.equal(JSON.parse(fs.readFileSync(manifestPath)).version, "26.901.41600-linux-native.8");
   stage();
-  assert.equal(JSON.parse(fs.readFileSync(manifestPath)).version, "26.901.41600-linux-native.7");
+  assert.equal(JSON.parse(fs.readFileSync(manifestPath)).version, "26.901.41600-linux-native.8");
   fs.writeFileSync(mcpPath, "upstream drift");
   assert.throws(stage, /unified.*contract/i);
 });
