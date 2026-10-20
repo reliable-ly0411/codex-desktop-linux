@@ -156,6 +156,11 @@ hashes.
 - Documentation changes verify relative links, documented Make/CLI commands,
   feature IDs, and `git diff --check`.
 
-## Release and repository maintenance
+## 发布规范入口
 
-Before changing versions, branches, packaging, release notes, or public issue summaries, read `RELEASING.md` and follow its repository-specific mapping. Preserve all other instructions in this file and any narrower directory instructions. Published tags and asset bytes are immutable: fix a release through a new version, never by moving a published tag or overwriting assets. Keep upstream mirrors free of fork-only policy and localization changes. Release preparation does not itself grant permission to publish, merge, delete, or change repository settings.
+修改分支、版本、打包、Release 或公开 Issue 说明前，依次读取：
+
+1. [通用规范](RELEASING.md)：版本、分支、包名、验收与公开说明原则。
+2. [本仓库补充](RELEASING.repository.zh-CN.md)：本仓分支、版本映射及上游例外。
+
+保留本文件和下级目录的既有规则。具体任务、检查结果和整改进度不写入上述规范；规范文件不替代合并、发布、部署或设置变更所需的授权。
