@@ -73,7 +73,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
   mutate:
-    if: inputs.operation != 'plan'
+    if: github.repository == 'ilysenko/codex-desktop-linux' && inputs.operation != 'plan'
     name: ${{ inputs.operation }} labels
     runs-on: ubuntu-latest
     timeout-minutes: 15
