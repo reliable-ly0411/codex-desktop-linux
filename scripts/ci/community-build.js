@@ -5,7 +5,7 @@ const path = require("node:path");
 const crypto = require("node:crypto");
 const { execFileSync } = require("node:child_process");
 const { resolveOfficialPackage, verifyIndexedFile } = require("../lib/upstream-linux-package.js");
-const { chooseRelease, publish } = require("./community-build-release.js");
+const { chooseRelease, completeRelease, publish } = require("./community-build-release.js");
 const { officialIdentity, requireLicense, POLICY } = require("./community-official-trigger.js");
 const REPOSITORY = "https://persistent.oaistatic.com/codex-app-prod/linux/deb";
 const digest = (input) => crypto.createHash("sha256").update(input).digest("hex");
@@ -57,7 +57,9 @@ async function main() {
     const pages = api(`repos/${process.env.GITHUB_REPOSITORY}/releases?per_page=100`, true);
     const prior = pages.flat().find(r => r.tag_name === `official-${upstreamKey}` && !r.draft);
     if (prior) {
-      if (prior.prerelease || !prior.body?.includes(`<!-- official-package:${upstreamKey} -->`)) throw Error("Conflicting official package Release");
+      const priorKey = /<!-- community-build-key:([a-f0-9]{64}) -->/.exec(prior.body || "")?.[1];
+      if (!priorKey || !completeRelease(prior, priorKey, arch)
+          || !prior.body?.includes(`<!-- official-package:${upstreamKey} -->`)) throw Error("Conflicting or incomplete official package Release");
       fs.appendFileSync(process.env.GITHUB_OUTPUT, "build=false\n");
       summary("This official package is already published; wrapper/source changes do not republish it.");
       return;
