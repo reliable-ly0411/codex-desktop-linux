@@ -7,6 +7,11 @@ run-name: Community deb · ${{ github.event_name }} · ${{ inputs.architecture |
     - cron: '23 */6 * * *'
   workflow_dispatch:
     inputs:
+      run_mode:
+        description: Sync-only never resolves, builds, uploads or publishes a package
+        type: choice
+        options: [sync-only, release-candidate]
+        default: sync-only
       sync_upstream:
         description: Sync upstream before building / 先同步上游
         type: boolean
@@ -52,8 +57,31 @@ jobs:
           SYNC_UPSTREAM: ${{ github.event_name != 'workflow_dispatch' || inputs.sync_upstream }}
         run: bash scripts/ci/sync-community-fork.sh
 
-  build:
+  verify:
     needs: sync
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          ref: ${{ needs.sync.outputs.source_sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 24
+      - name: Offline orchestration and signature-fixture checks
+        run: |
+          node --test scripts/ci/community-*.test.js scripts/lib/upstream-linux-package.test.js
+          bash -n scripts/ci/sync-community-fork.sh scripts/ci/community-build-deb.sh
+      - name: Report explicit sync-only completion
+        if: github.event_name == 'workflow_dispatch' && inputs.run_mode == 'sync-only'
+        run: echo 'Sync-only completed. No official package was resolved, built, uploaded or published.' >> "$GITHUB_STEP_SUMMARY"
+
+  build:
+    needs: [sync, verify]
+    if: github.event_name != 'workflow_dispatch' || inputs.run_mode == 'release-candidate'
     strategy:
       fail-fast: false
       matrix:
@@ -79,10 +107,6 @@ jobs:
           node-version: 24
       - name: Prepare runner-local build state
         run: echo "BUILD_STATE_DIR=$RUNNER_TEMP/community-build-$BUILD_ARCH" >> "$GITHUB_ENV"
-      - name: Regular offline orchestration checks (even without a Release)
-        run: |
-          node --test scripts/ci/community-*.test.js scripts/lib/upstream-linux-package.test.js
-          bash -n scripts/ci/sync-community-fork.sh scripts/ci/community-build-deb.sh
       - name: Verify signed metadata and check published Releases
         id: plan
         env:

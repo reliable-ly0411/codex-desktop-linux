@@ -1,5 +1,11 @@
 # Community release policy
 
+Manual dispatch defaults to `run_mode: sync-only`: it synchronizes source and
+runs offline orchestration/signature-fixture checks, and the entire package build
+job is skipped. It does not resolve official package metadata, build packages,
+upload artifacts or publish Releases. Explicit `release-candidate` dispatch is
+separate; the six-hour schedule retains the guarded package-update policy.
+
 The six-hour schedule synchronizes source from `ilysenko/codex-desktop-linux`
 and runs ordinary offline orchestration checks. Only an update to OpenAI's
 **official signed stable installation package** triggers a package Release.
