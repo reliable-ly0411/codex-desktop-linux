@@ -22,6 +22,7 @@ concurrency:
 
 jobs:
   remind:
+    if: github.repository == 'ilysenko/codex-desktop-linux'
     name: open sync reminder
     runs-on: ubuntu-latest
     steps:

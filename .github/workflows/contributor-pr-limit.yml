@@ -10,6 +10,7 @@ permissions:
 
 jobs:
   enforce-limit:
+    if: github.repository == 'ilysenko/codex-desktop-linux'
     name: Enforce contributor pull request limit
     runs-on: ubuntu-latest
     concurrency:
