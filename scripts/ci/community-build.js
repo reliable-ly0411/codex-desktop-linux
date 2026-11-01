@@ -6,6 +6,7 @@ const crypto = require("node:crypto");
 const { execFileSync } = require("node:child_process");
 const { resolveOfficialPackage, verifyIndexedFile } = require("../lib/upstream-linux-package.js");
 const { chooseRelease, publish } = require("./community-build-release.js");
+const { officialIdentity, requireLicense, POLICY } = require("./community-official-trigger.js");
 const REPOSITORY = "https://persistent.oaistatic.com/codex-app-prod/linux/deb";
 const digest = (input) => crypto.createHash("sha256").update(input).digest("hex");
 
@@ -22,7 +23,7 @@ function identity(source, metadata, features) {
 }
 
 function requireSamePackage(expected, actual) {
-  for (const key of ["repository", "package", "architecture", "version", "repositoryPath", "sha256", "size"]) {
+  for (const key of ["repository", "package", "architecture", "version", "repositoryPath", "sha256", "size", "signatureFingerprint", "packagesSha256", "inReleaseSha256"]) {
     if (expected[key] !== actual[key]) throw new Error(`Signed package changed during build: ${key}`);
   }
 }
@@ -46,14 +47,27 @@ async function main() {
     const metadata = await resolveOfficialPackage({ architecture: arch, repository: REPOSITORY,
       outputDir: path.join(dir, "metadata"), metadataPath: path.join(dir, "metadata.json"),
       keyBase64Path: "assets/openai-codex-linux-repository-key.gpg.base64", metadataOnly: true });
+    const upstreamKey = officialIdentity(metadata);
+    const policy = JSON.parse(fs.readFileSync(POLICY, "utf8"));
+    if (policy.baselinePackageKeys.includes(upstreamKey)) {
+      fs.appendFileSync(process.env.GITHUB_OUTPUT, "build=false\n");
+      summary("Baseline official stable package unchanged; ordinary wrapper commits do not publish.");
+      return;
+    }
+    const pages = api(`repos/${process.env.GITHUB_REPOSITORY}/releases?per_page=100`, true);
+    const prior = pages.flat().find(r => r.tag_name === `official-${upstreamKey}` && !r.draft);
+    if (prior) {
+      if (prior.prerelease || !prior.body?.includes(`<!-- official-package:${upstreamKey} -->`)) throw Error("Conflicting official package Release");
+      fs.appendFileSync(process.env.GITHUB_OUTPUT, "build=false\n");
+      summary("This official package is already published; wrapper/source changes do not republish it.");
+      return;
+    }
+    const licenseEvidence = requireLicense(policy, metadata);
     const features = fs.readFileSync(process.env.CODEX_LINUX_FEATURES_CONFIG);
     const key = identity(source, metadata, features);
     const artifactName = `community-deb-${arch}-${key}`;
-    const repo = process.env.GITHUB_REPOSITORY;
-    const force = process.env.FORCE_REBUILD === "true";
-    const pages = force ? [] : api(`repos/${repo}/releases?per_page=100`, true);
-    const previous = chooseRelease(pages.flat(), key, arch, force);
-    writeJson(planFile, { source, metadata, key, artifactName, featuresSha256: digest(features) });
+    const previous = chooseRelease(pages.flat(), key, arch, false);
+    writeJson(planFile, { source, metadata, upstreamKey, licenseEvidence, key, artifactName, featuresSha256: digest(features) });
     fs.appendFileSync(process.env.GITHUB_OUTPUT, `build=${!previous}\nartifact_name=${artifactName}\n`);
     summary(`### ${arch}: ${previous ? "Unchanged; reuse Release / 无变化，复用已发布版本" : "Build / 构建"}\n\nOfficial version: \`${metadata.version}\`\n\nSource: \`${source}\`\n\nOfficial SHA-256: \`${metadata.sha256}\``);
     if (previous) summary(`\n[Existing download / 已有下载](${previous.html_url})`);

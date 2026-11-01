@@ -1,0 +1,5 @@
+{
+  "trigger": "official-signed-stable-package",
+  "baselinePackageKeys": [],
+  "redistributionApprovals": []
+}
