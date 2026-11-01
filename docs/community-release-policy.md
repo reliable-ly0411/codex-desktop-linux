@@ -15,7 +15,10 @@ run. Official signatures and indexed hashes must verify before any build. If
 signed metadata changes during download, that candidate fails closed. Each
 package identity has one stable `official-<identity hash>` fork tag. Published
 tags and assets are never overwritten; an incomplete matching draft may upload
-only missing assets, and existing draft bytes must match exactly. A new wrapper
+only missing assets when resuming the exact same candidate bytes and originating
+run. A different run must NOT rebuild and replace a partial draft: it fails
+closed and requires explicit operator recovery of the original artifacts/provenance.
+Existing draft bytes must match exactly. A new wrapper
 commit cannot trigger a rebuild/republication of the same official payload.
 
 ## Current permission blocker
@@ -35,9 +38,13 @@ Do not fill these fields using assumptions, the wrapper MIT license, or a user
 request to publish. This is a license review gate, not recurring manual desktop
 acceptance. Ordinary source synchronization and CI do not require this approval.
 
-`baselinePackageKeys` can record already-observed packages that should not be
-backfilled. It must be populated only from independently verified signed metadata,
-never from an assumed version or unverified URL.
+`baselinePackages` records both architectures of the independently signature-verified
+26.1027.51404 package observed on 2026-11-01. It is not backfilled. Before building
+and again before publishing, compare each architecture against this baseline and
+all previous `official-*` Release metadata using Debian version ordering. Reject
+older versions and same-version payload SHA changes, even if signature and license
+checks pass. A same-version, same-payload observation is a no-op. Missing or
+inconsistent release-history metadata fails closed, not silently discarded.
 
 Publication is limited to this fork's GitHub Releases. No website deployment,
 registry upload, R2 deletion, issue/PR closures, comments or labels are authorized.

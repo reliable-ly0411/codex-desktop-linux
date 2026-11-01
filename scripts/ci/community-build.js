@@ -6,7 +6,7 @@ const crypto = require("node:crypto");
 const { execFileSync } = require("node:child_process");
 const { resolveOfficialPackage, verifyIndexedFile } = require("../lib/upstream-linux-package.js");
 const { chooseRelease, completeRelease, publish } = require("./community-build-release.js");
-const { officialIdentity, requireLicense, POLICY } = require("./community-official-trigger.js");
+const { officialIdentity, requireLicense, checkPackageUpdate, verifyPublishedHistory, POLICY } = require("./community-official-trigger.js");
 const REPOSITORY = "https://persistent.oaistatic.com/codex-app-prod/linux/deb";
 const digest = (input) => crypto.createHash("sha256").update(input).digest("hex");
 
@@ -49,12 +49,10 @@ async function main() {
       keyBase64Path: "assets/openai-codex-linux-repository-key.gpg.base64", metadataOnly: true });
     const upstreamKey = officialIdentity(metadata);
     const policy = JSON.parse(fs.readFileSync(POLICY, "utf8"));
-    if (policy.baselinePackageKeys.includes(upstreamKey)) {
-      fs.appendFileSync(process.env.GITHUB_OUTPUT, "build=false\n");
-      summary("Baseline official stable package unchanged; ordinary wrapper commits do not publish.");
-      return;
-    }
     const pages = api(`repos/${process.env.GITHUB_REPOSITORY}/releases?per_page=100`, true);
+    verifyPublishedHistory(pages.flat(), id => execFileSync("gh", ["api", "-H", "Accept: application/octet-stream",
+      `repos/${process.env.GITHUB_REPOSITORY}/releases/assets/${id}`]));
+    const isNewPackage = checkPackageUpdate(metadata, policy, pages.flat());
     const prior = pages.flat().find(r => r.tag_name === `official-${upstreamKey}` && !r.draft);
     if (prior) {
       const priorKey = /<!-- community-build-key:([a-f0-9]{64}) -->/.exec(prior.body || "")?.[1];
@@ -62,6 +60,11 @@ async function main() {
           || !prior.body?.includes(`<!-- official-package:${upstreamKey} -->`)) throw Error("Conflicting or incomplete official package Release");
       fs.appendFileSync(process.env.GITHUB_OUTPUT, "build=false\n");
       summary("This official package is already published; wrapper/source changes do not republish it.");
+      return;
+    }
+    if (!isNewPackage) {
+      fs.appendFileSync(process.env.GITHUB_OUTPUT, "build=false\n");
+      summary("Official package already observed in verified baseline/history; no historical backfill.");
       return;
     }
     const licenseEvidence = requireLicense(policy, metadata);

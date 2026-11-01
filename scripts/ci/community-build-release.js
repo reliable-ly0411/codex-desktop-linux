@@ -3,7 +3,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const crypto = require("node:crypto");
 const { execFileSync } = require("node:child_process");
-const { officialIdentity, requireLicense, POLICY } = require("./community-official-trigger.js");
+const { officialIdentity, requireLicense, checkPackageUpdate, historyMarker, verifyPublishedHistory, POLICY } = require("./community-official-trigger.js");
 const REPO = "reliable-ly0411/codex-desktop-linux";
 const marker = (key) => `<!-- community-build-key:${key} -->`;
 const hash = (file) => crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex");
@@ -31,6 +31,7 @@ function verifyAssets(release, expected) {
 function notes(plan, deb, runId) {
   return `${marker(plan.key)}
 <!-- official-package:${plan.upstreamKey} -->
+${historyMarker(plan.metadata)}
 ## 本次发布 / Release
 
 ChatGPT Community 社区构建，基于 OpenAI 官方 Linux 包 **${plan.metadata.version}**，架构 **${plan.metadata.architecture}**。
@@ -76,7 +77,8 @@ function publish(plan, env = process.env, io = {}) {
       || !["amd64", "arm64"].includes(plan.metadata.architecture)
       || !/^\d+$/.test(env.GITHUB_RUN_ID)) throw Error("Invalid release identity");
   if (officialIdentity(plan.metadata) !== plan.upstreamKey) throw Error("Official identity mismatch");
-  requireLicense(io.policy || JSON.parse(fs.readFileSync(POLICY, "utf8")), plan.metadata);
+  const policy = io.policy || JSON.parse(fs.readFileSync(POLICY, "utf8"));
+  requireLicense(policy, plan.metadata);
   const gh = io.gh || ((args) => execFileSync("gh", args, { encoding: "utf8", maxBuffer: 32 * 1024 * 1024 }));
   const api = io.api || ((endpoint) => JSON.parse(gh(["api", endpoint])));
   const dir = path.resolve(env.COMMUNITY_ARTIFACT_DIR || "community-artifacts");
@@ -95,8 +97,14 @@ function publish(plan, env = process.env, io = {}) {
   const body = notes(plan, info.deb, env.GITHUB_RUN_ID);
   const notesFile = path.join(path.resolve(env.BUILD_STATE_DIR), "release-notes.md");
   fs.writeFileSync(notesFile, body);
-  const lookup = () => JSON.parse(gh(["api", "--paginate", "--slurp", `repos/${REPO}/releases?per_page=100`]))
-    .flat().find((r) => r.tag_name === tag);
+  const lookup = () => {
+    const releases = JSON.parse(gh(["api", "--paginate", "--slurp", `repos/${REPO}/releases?per_page=100`])).flat();
+    verifyPublishedHistory(releases, id => gh(["api", "-H", "Accept: application/octet-stream", `repos/${REPO}/releases/assets/${id}`]));
+    const isNew = checkPackageUpdate(plan.metadata, policy, releases);
+    const found = releases.find(r => r.tag_name === tag);
+    if (!isNew && !found) throw Error("Baseline package cannot be backfilled");
+    return found;
+  };
   const existing = lookup();
   if (existing) {
     if (!existing.body?.includes(marker(plan.key)) || existing.target_commitish !== plan.source) {
