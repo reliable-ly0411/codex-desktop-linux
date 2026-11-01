@@ -344,3 +344,13 @@ test("manual official Linux validation accepts an exact campaign", () => {
   assert.match(packageMatrix, /package matrix input does not match the dispatched campaign/);
   assert.match(packageMatrix, /\.\/install\.sh "\$\{\{ steps\.upstream\.outputs\.package \}\}"/);
 });
+
+test("feature audit binds its extracted ASAR to the verified official runtime root", () => {
+  const workflow = read(".github/workflows/upstream-build-app.yml");
+  assert.match(workflow, /node scripts\/ci\/verify-official-linux-features\.js "\$extracted_asar" "\$upstream_root\/usr\/lib\/chatgpt"/);
+  assert.match(read("scripts/ci/verify-official-linux-features.js"), /process\.env\.CODEX_UPSTREAM_APP_DIR = resolveOfficialAppRoot\(source, process\.argv\[3\]\)/);
+});
+
+test("normal CI includes explicit local package signature-policy regressions", () => {
+  assert.match(read(".github/workflows/ci.yml"), /node --test scripts\/lib\/install-verification\.test\.js/);
+});
