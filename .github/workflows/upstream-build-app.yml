@@ -282,7 +282,7 @@ jobs:
           npx --yes @electron/asar extract \
             "$upstream_root/usr/lib/chatgpt/resources/app.asar" \
             "$extracted_asar"
-          node scripts/ci/verify-official-linux-features.js "$extracted_asar"
+          node scripts/ci/verify-official-linux-features.js "$extracted_asar" "$upstream_root/usr/lib/chatgpt"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: official-linux-${{ matrix.architecture }}-metadata

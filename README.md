@@ -57,18 +57,21 @@ cd codex-desktop-linux
 | Fedora | `make bootstrap-native` | Builds and installs an RPM |
 | openSUSE | `make bootstrap-native` | Builds and installs an RPM |
 | Arch, Manjaro, EndeavourOS | `make bootstrap-native` | Builds and installs a pacman package |
-| Gentoo | `make bootstrap-native` | Builds a local ebuild and installs through Portage; supports `ui-tweaks` and `remote-mobile-control`, no updater |
+| Gentoo | `make bootstrap-native` | Builds a local ebuild and installs through Portage; audited features only, no updater |
 | NixOS or another Nix system | `nix run github:ilysenko/codex-desktop-linux` | Builds and runs the flake output; see [Nix](docs/nix.md) |
 | Atomic desktops or another distribution | `make build-app && make appimage` | Produces a local AppImage without the native updater |
 
 Gentoo's application merge ignores `EMERGE_DEFAULT_OPTS` to install through the
 generated ebuild rather than reuse a binary package. Global Portage settings are unchanged.
 Gentoo has a phase-aware dependency and package-resource framework for audited
-features. `ui-tweaks` and `remote-mobile-control` are supported and remain
+features. `ui-tweaks`, `remote-mobile-control` and
+`community-features-in-gui-settings` are supported and remain
 disabled by default; other repository features require their own support
 declarations. Remote mobile control uses the existing Desktop-owned app-server;
-the ebuild does not install or enable a remote-control service. See the
-[Gentoo feature contract](docs/linux-features-architecture.md#gentoo-feature-contract).
+the ebuild does not install or enable a remote-control service. The read-only
+community catalog is embedded in ASAR and needs no extra Gentoo dependency or
+updater snapshot; see its [Gentoo scope](linux-features/community-features-in-gui-settings/README.md#gentoo)
+and the [Gentoo feature contract](docs/linux-features-architecture.md#gentoo-feature-contract).
 Gentoo's local ebuild path has been tested on OpenRC; a Gentoo systemd
 environment has not been tested. See [Gentoo validation scope](docs/native-setup.md#gentoo-local-ebuild).
 
@@ -123,15 +126,26 @@ guided flow, non-interactive settings, updater selection, and cleanup.
 ### Use an already downloaded official package
 
 Normally the build resolves `amd64` or `arm64` from the signed stable index.
-You can instead provide a local package that you already trust:
+You can reuse an already-downloaded package body:
 
 ```bash
 UPSTREAM_DEB=/path/to/chatgpt_<version>_<arch>.deb make build-app
 ```
 
-The local package is still checked for package name, architecture, control
-metadata, payload completeness, and SHA-256 recording. Because signed
-repository discovery is skipped, the caller is responsible for its origin.
+The local package is verified against the signed stable metadata by default,
+including its version, architecture, size, and SHA-256, without downloading its
+body again. All builds verify without prompting or reading user input,
+including interactive local builds. To choose the local exception explicitly:
+
+```bash
+./install.sh --skip-oai-official-sig-verification /path/to/chatgpt_<version>_<arch>.deb
+```
+
+The exception applies only to this invocation and still checks package name,
+version format, architecture, and payload completeness. Build metadata records
+`signatureVerification: "skipped"`; the caller is responsible for provenance.
+Verification errors never silently enable the exception. See
+[Build and packaging](docs/build-and-packaging.md#build-the-application-tree).
 Old `.dmg`, `DMG=`, and `CODEX_DMG_*` inputs are intentionally unsupported.
 
 ### Before you install
@@ -240,7 +254,7 @@ state.
 | Capability | Default | How it is provided |
 |---|---|---|
 | Official ChatGPT Linux runtime | Always | Copied from the verified official `.deb` data payload |
-| Signed source verification | Always | Pinned repository key → `InRelease` → `Packages` SHA-256 → package SHA-256 |
+| Signed source verification | Enabled | Pinned repository key → `InRelease` → `Packages` SHA-256 → package SHA-256; explicit local exceptions are recorded |
 | Native deb, RPM, and pacman packages | Manual build | `make deb`, `make rpm`, or `make pacman` |
 | AppImage | Manual build | `make appimage`; no automatic sandbox bypass or bundled updater |
 | Nix flake | Manual build | `nix run github:ilysenko/codex-desktop-linux` |
@@ -271,9 +285,11 @@ requirements, known limitations, configuration, and tests.
 | `chatgpt-sidebar-separate-history` | Default the ChatGPT history filter to Chat and remember Chat / Work / All selections | [Docs](linux-features/chatgpt-sidebar-separate-history/README.md) |
 | `chronicle-skysight` | Opt-in Linux desktop activity memory and restricted Skysight MCP tools | [Docs](linux-features/chronicle-skysight/README.md) |
 | `codex-micro` | Work Louder Codex Micro hotplug and hidraw policy using upstream `node-hid` | [Docs](linux-features/codex-micro/README.md) |
+| `community-features-in-gui-settings` | Browse public features, declared subfeatures and enabled local features atop General settings; build-selection counts and statuses, English and Simplified Chinese UI | [Docs](linux-features/community-features-in-gui-settings/README.md) |
 | `community-profile-isolation` | Isolate Community Codex/Electron state and child CLI resolution from official ChatGPT | [Docs](linux-features/community-profile-isolation/README.md) |
 | `computer-use-linux` | Linux desktop-control UI and native MCP backend | [Docs](linux-features/computer-use-linux/README.md) |
 | `copilot-reasoning-effort` | Persistent reasoning-effort defaults for Copilot-auth sessions | [Docs](linux-features/copilot-reasoning-effort/README.md) |
+| `desktop-identity` | Use the Community desktop entry for notification and child-process desktop identity | [Docs](linux-features/desktop-identity/README.md) |
 | `directory-only-working-tree-watch` | Bounded Watchbound working-tree watching | [Docs](linux-features/directory-only-working-tree-watch/README.md) |
 | `filesystem-root-follow-ups` | Allow follow-ups in existing local tasks rooted at `/` | [Docs](linux-features/filesystem-root-follow-ups/README.md) |
 | `flatpak-chrome-native-messaging` | Bridge the official Chrome extension into Flatpak Google Chrome | [Docs](linux-features/flatpak-chrome-native-messaging/README.md) |
@@ -293,6 +309,7 @@ requirements, known limitations, configuration, and tests.
 | `project-task-sort` | Restore Created ordering for alternate Projects tasks | [Docs](linux-features/project-task-sort/README.md) |
 | `read-aloud` | Add Linux read-aloud controls to assistant responses | [Docs](linux-features/read-aloud/README.md) |
 | `read-aloud-mcp` | Let the agent speak through the Linux Read Aloud backend | [Docs](linux-features/read-aloud-mcp/README.md) |
+| `reasoning-visibility` | Add a translated, default-off General setting to show reasoning summaries; changes apply after restart | [Docs](linux-features/reasoning-visibility/README.md) |
 | `record-and-replay` | Record a Linux demonstration and turn it into a reusable skill | [Docs](linux-features/record-and-replay/README.md) |
 | `remote-control-ui` | Expose experimental remote-control settings on Linux | [Docs](linux-features/remote-control-ui/README.md) |
 | `remote-mobile-control` | Experimental Linux remote-host and outbound-control flows | [Docs](linux-features/remote-mobile-control/README.md) |
@@ -385,12 +402,14 @@ and [feature architecture](docs/linux-features-architecture.md).
 
 ## Updates
 
-Native packages include `codex-update-manager` by default. Its user service
+deb, RPM, and pacman packages include `codex-update-manager` by default. Its user service
 polls the same signed APT metadata, caches official packages by
 version/architecture/SHA-256, reconstructs the selected native package with the
-currently enabled features, and waits for the application to exit before
-promotion. The immediately previous managed package remains available for
-rollback.
+currently enabled features in a separate workspace, and waits for the managed
+application to exit before an authorized package-manager install. A durable
+transaction supports recovery from interrupted or partially applied installs;
+this does not use the manual generated-tree directory exchange. The immediately
+previous managed package remains available for rollback.
 
 ```bash
 codex-update-manager status
@@ -425,8 +444,8 @@ PACKAGE_WITH_UPDATER=0 make package
 make install
 ```
 
-AppImage and repository-only generated apps do not include the native package
-updater. Full behavior and recovery steps are documented in
+AppImage, repository-only generated apps, Nix, and manual-update Gentoo outputs
+do not use the native package updater. Full behavior and recovery steps are documented in
 [Updater](docs/updater.md).
 
 ## Build from the GitHub website
@@ -490,12 +509,12 @@ output layout, parallelism, and payload inspection.
 | Official and Community launches interfere | Fully exit every `ChatGPT` process; both apps share the upstream profile |
 | AppImage opens from Flatpak Chrome, but the extension says `Native transport disconnected` | Enable `flatpak-chrome-native-messaging`; see [Flatpak Chrome setup](docs/troubleshooting.md#appimage-opens-from-flatpak-chrome-but-the-extension-cannot-connect) |
 | Browser/Chrome extension cannot connect after migration | Exit ChatGPT and Chrome completely, then follow the narrow cache repair in [Troubleshooting](docs/troubleshooting.md#browser-or-chrome-plugin-is-visible-but-cannot-connect) |
-| Signature or package verification fails | Do not bypass it; check time, network, `gpgv`, architecture, and disk space |
+| Signature or package verification fails | Check time, network, `gpgv`, architecture, and disk space; intentional unverified local builds require the documented explicit flag |
 | App does not launch | Run `/opt/codex-desktop/start.sh --diagnose` |
 | App uses XWayland or needs persistent Electron flags | A confirmed Wayland session selects the native backend automatically; pin one with `CODEX_OZONE_PLATFORM=x11\|wayland`, or put one flag per line in `~/.config/codex-desktop/electron-flags.conf`, for example `--ozone-platform=x11` |
 | AppImage reports a sandbox error | Enable user namespaces or install a native package; `--no-sandbox` is not added automatically |
 | Enabled feature drifts after an upstream release | Disable that feature to confirm the clean baseline and attach its patch report to an issue |
-| Updater waits for application exit | Close official and Community processes, then inspect `codex-update-manager status --json` |
+| Updater waits for application exit | Close the managed app (default `/opt/codex-desktop/ChatGPT`); inspect `appExecutable` and `appRunning` with `codex-update-manager diagnose --json` |
 | Old `codex-app.backup-*` reports permission errors | Inspect the exact path and follow the root-owned backup procedure; never delete a wildcard blindly |
 
 Full guide: [Troubleshooting](docs/troubleshooting.md).

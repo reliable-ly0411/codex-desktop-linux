@@ -1,0 +1,135 @@
+{
+  "aliases": [
+    "zh",
+    "zh-CN",
+    "zh-Hans",
+    "zh-SG"
+  ],
+  "messages": {
+    "title": "社区功能",
+    "show": "展开",
+    "hide": "收起",
+    "enabled": "已安装",
+    "available": "未安装",
+    "subfeatureStatus": "{enabled}/{total} 已安装",
+    "summary": "本次构建安装 {enabled} 项 · 支持 {total} 项",
+    "note": "依赖功能需要父项，子功能归属于父项。子功能分别计数，分组父项不再重复计数。已安装表示包含在本次构建中，不代表运行状态。",
+    "tree": "社区功能树",
+    "select": "选择功能查看说明",
+    "requires": "依赖：{names}",
+    "conflicts": "不兼容：{names}",
+    "local": "本地功能",
+    "multiple": "多重依赖",
+    "cycle": "循环引用",
+    "missing": "目录未收录",
+    "empty": "暂无功能",
+    "id": "功能 ID",
+    "snapshot": "功能目录版本：{revision}",
+    "expand": "展开 {name}",
+    "collapse": "收起 {name}",
+    "featureLabel": "{name}，{status}",
+    "separator": "、",
+    "list": "功能目录",
+    "subfeatureGroup": "子功能（{count}）",
+    "dependentGroup": "依赖此功能（{count}）",
+    "owner": "所属功能：{name}"
+  },
+  "features": {
+    "ui-tweaks/dock-icon": {
+      "title": "Dock 图标",
+      "description": "显示 Dock 图标选择器，并同步到 Linux 窗口、托盘和受支持的启动器。"
+    },
+    "ui-tweaks/ui-font-size": {
+      "title": "扩展界面字号",
+      "description": "将界面字号上限提高到可配置的值。"
+    },
+    "ui-tweaks/custom-font-input": {
+      "title": "自定义字体输入",
+      "description": "在已安装字体和手动输入 CSS 字体列表之间切换。"
+    },
+    "ui-tweaks/suggested-prompts": {
+      "title": "建议提示词",
+      "description": "在设置中显示建议提示词，并在首页启用与项目相关的卡片。"
+    },
+    "ui-tweaks/model-list": {
+      "title": "展开模型选择器",
+      "description": "默认打开高级选择器，直接展示模型及其支持的推理强度。"
+    },
+    "ui-tweaks/english-effort-labels": {
+      "title": "英语推理强度名称",
+      "description": "在简体中文界面中保留英语推理强度名称。"
+    },
+    "ui-tweaks/selection-more-details": {
+      "title": "选中文本：更多详情",
+      "description": "恢复选中文本菜单的更多详情操作，通过 Quick Chat 解释所选文本。"
+    },
+    "ui-tweaks/annotation-submit": {
+      "title": "批注提交快捷键",
+      "description": "用 Ctrl+Enter 发送当前选中文本的批注，避免被常规输入框拦截。"
+    },
+    "ui-tweaks/sidebar-project-name": {
+      "title": "侧栏项目名称样式",
+      "description": "自定义侧栏中项目名称的样式。"
+    },
+    "automation-extensions/multi-time-schedules": {
+      "title": "多个执行时间",
+      "description": "支持在自动化重复规则中设置多个执行时间。"
+    },
+    "automation-extensions/eager-automation-tool": {
+      "title": "提前提供自动化工具",
+      "description": "无需等待动态工具发现即可提供 automation_update。"
+    },
+    "linux-performance-workarounds/sidebar-scrolling": {
+      "title": "侧栏滚动修复",
+      "description": "应用针对 Linux 侧栏滚动回退的性能修复。"
+    },
+    "linux-performance-workarounds/tab-layout": {
+      "title": "标签布局修复",
+      "description": "关闭受影响的应用标签布局动画。"
+    },
+    "linux-performance-workarounds/streaming-markdown": {
+      "title": "流式 Markdown 修复",
+      "description": "降低受影响的流式 Markdown 动画开销。"
+    },
+    "agent-workspace/workspace-controls": {
+      "title": "工作区控制",
+      "description": "为另行安装的 Agent Workspace 后端提供配置编辑、工作区管理和查看器控制。"
+    },
+    "agent-workspace/agent-skill": {
+      "title": "代理工作区技能",
+      "description": "提供供代理逐步调用隐藏桌面工作区能力的技能入口。"
+    },
+    "chronicle-skysight/chronicle-controls": {
+      "title": "Chronicle 控制",
+      "description": "提供 Chronicle 活动捕获控制；捕获仍需在运行时主动开启。"
+    },
+    "chronicle-skysight/skysight-mcp": {
+      "title": "Skysight MCP",
+      "description": "提供独立的活动记忆 MCP 插件，用于查询已捕获的桌面上下文。"
+    },
+    "computer-use-linux/native-control": {
+      "title": "原生电脑操作",
+      "description": "提供原生电脑操作桥接与后端；仍需在运行时开启“任意应用”访问并满足系统权限要求。"
+    },
+    "computer-use-linux/running-app-picker": {
+      "title": "运行中应用选择器",
+      "description": "使用运行中的 Linux 窗口和桌面条目图标填充原生应用选择器。"
+    },
+    "remote-mobile-control/mobile-host": {
+      "title": "移动端远程主机",
+      "description": "为本机提供实验性的移动端远程主机适配，仍受账户资格与配对要求约束。"
+    },
+    "remote-mobile-control/outbound-control": {
+      "title": "控制其他设备",
+      "description": "提供出站远程注册与连接发现入口，保留账户授权要求。"
+    },
+    "shared-app-server-socket/shared-authority": {
+      "title": "共享应用服务器",
+      "description": "让普通应用服务器客户端经私有 Unix socket 连接桌面应用已有的运行实例。"
+    },
+    "shared-app-server-socket/attached-cli": {
+      "title": "附着式 CLI",
+      "description": "提供 codex-desktop --cli，使 CLI 命令连接正在运行的桌面应用实例。"
+    }
+  }
+}

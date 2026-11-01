@@ -53,15 +53,17 @@ cd codex-desktop-linux
 | Fedora | `make bootstrap-native` | 构建并安装 RPM |
 | openSUSE | `make bootstrap-native` | 构建并安装 RPM |
 | Arch、Manjaro、EndeavourOS | `make bootstrap-native` | 构建并安装 pacman 软件包 |
-| Gentoo | `make bootstrap-native` | 构建本地 ebuild 并通过 Portage 安装；支持 `ui-tweaks` 和 `remote-mobile-control`，不含更新器 |
+| Gentoo | `make bootstrap-native` | 构建本地 ebuild 并通过 Portage 安装；仅支持已审计的功能，不含更新器 |
 | NixOS 或其他 Nix 系统 | `nix run github:ilysenko/codex-desktop-linux` | 构建并运行 flake；参阅 [Nix](docs/nix.md) |
 | Atomic 桌面或其他发行版 | `make build-app && make appimage` | 生成不含原生更新器的本地 AppImage |
 
 Gentoo 的应用合并会忽略 `EMERGE_DEFAULT_OPTS`，从生成的 ebuild 安装载荷，而非复用
 二进制包缓存；不会修改全局 Portage 配置。
-Gentoo 已提供分阶段依赖和包资源框架；现已支持 `ui-tweaks` 和
-`remote-mobile-control`，且仍默认关闭。手机远程控制沿用由 Desktop 管理的
+Gentoo 已提供分阶段依赖和包资源框架；现已支持 `ui-tweaks`、
+`remote-mobile-control` 和 `community-features-in-gui-settings`，且仍默认关闭。手机远程控制沿用由 Desktop 管理的
 app-server；ebuild 不安装或启用远程控制服务。
+只读社区功能目录嵌入 ASAR，无需额外 Gentoo 依赖或更新构建器快照；
+打包验证与实机 GUI 验收的区别见[目录功能的 Gentoo 说明](linux-features/community-features-in-gui-settings/README.md#gentoo)。
 其他仓库功能需单独审查并声明支持。字段约定见[Gentoo 功能契约](docs/linux-features-architecture.md#gentoo-feature-contract)。
 Gentoo 本地 ebuild 安装路径已在 OpenRC 环境测试，尚未测试 Gentoo systemd
 环境；验证范围见[Gentoo 原生安装说明](docs/native-setup.md#gentoo-local-ebuild)。
@@ -110,15 +112,25 @@ make install-native
 
 ### 使用已下载的官方软件包
 
-默认构建会从签名 stable index 中选择 `amd64` 或 `arm64`。也可以提供你已
-信任的本地软件包：
+默认构建会从签名 stable index 中选择 `amd64` 或 `arm64`。也可以复用已下载的
+本地软件包，避免再次下载包体：
 
 ```bash
 UPSTREAM_DEB=/path/to/chatgpt_<version>_<arch>.deb make build-app
 ```
 
-本地包仍会检查 package name、architecture、control metadata、payload
-完整性，并记录 SHA-256。但由于跳过了签名仓库发现，来源真实性由调用者负责。
+本地包默认仍用签名 stable metadata 核对版本、architecture、大小和 SHA-256。
+所有构建默认验证，不询问或读取用户输入，交互终端中也一样。
+只有显式传入以下开关，才选择仅对本次构建生效的例外：
+
+```bash
+./install.sh --skip-oai-official-sig-verification /path/to/chatgpt_<version>_<arch>.deb
+```
+
+该开关要求提供本地包，仍检查 package name、版本格式、architecture 和 payload
+完整性，并记录 SHA-256 与 `signatureVerification: "skipped"`；此时来源由调用者
+负责。选择不会保存到配置，验签失败也不会自动改为跳过。
+详见[构建与打包](docs/build-and-packaging.md#build-the-application-tree)。
 旧 `.dmg`、`DMG=` 和 `CODEX_DMG_*` 输入已明确不再支持。
 
 ### 安装前须知
@@ -216,7 +228,7 @@ Nix 用户应从 profile、Home Manager 配置或 NixOS module 中删除该包�
 | 能力 | 默认状态 | 提供方式 |
 |---|---|---|
 | 官方 ChatGPT Linux runtime | 始终启用 | 来自已验证官方 `.deb` 的 data payload |
-| 签名来源验证 | 始终启用 | 固定 repository key → `InRelease` → `Packages` SHA-256 → package SHA-256 |
+| 签名来源验证 | 默认启用 | 固定 repository key → `InRelease` → `Packages` SHA-256 → package SHA-256；显式本地例外会记录在构建元数据中 |
 | deb、RPM、pacman 原生包 | 手动构建 | `make deb`、`make rpm`、`make pacman` |
 | AppImage | 手动构建 | `make appimage`；不绕过 sandbox，不含原生 updater |
 | Nix flake | 手动构建 | `nix run github:ilysenko/codex-desktop-linux` |
@@ -246,9 +258,11 @@ Nix 用户应从 profile、Home Manager 配置或 NixOS module 中删除该包�
 | `chatgpt-sidebar-separate-history` | ChatGPT 历史记录默认仅显示聊天，并记住聊天 / Work / 全部筛选选项 | [文档](linux-features/chatgpt-sidebar-separate-history/README.md) |
 | `chronicle-skysight` | 可选的 Linux 桌面活动记忆与受限 Skysight MCP 工具 | [文档](linux-features/chronicle-skysight/README.md) |
 | `codex-micro` | 使用上游 `node-hid` 的 Codex Micro hotplug/hidraw policy | [文档](linux-features/codex-micro/README.md) |
+| `community-features-in-gui-settings` | 在常规设置页顶部查看公共功能、已声明的子功能及已启用的本地功能树；显示构建选择的数量与状态，支持英语和简体中文 | [文档](linux-features/community-features-in-gui-settings/README.md) |
 | `community-profile-isolation` | 将 Community 的 Codex/Electron 状态与子进程 CLI 解析和官方 ChatGPT 隔离 | [文档](linux-features/community-profile-isolation/README.md) |
 | `computer-use-linux` | Linux desktop-control UI 与原生 MCP backend | [文档](linux-features/computer-use-linux/README.md) |
 | `copilot-reasoning-effort` | Copilot auth 的 reasoning-effort 默认值 | [文档](linux-features/copilot-reasoning-effort/README.md) |
+| `desktop-identity` | 通知与子进程使用 Community 桌面入口标识，以正确显示图标 | [文档](linux-features/desktop-identity/README.md) |
 | `directory-only-working-tree-watch` | 有界 Watchbound 工作树监听 | [文档](linux-features/directory-only-working-tree-watch/README.md) |
 | `filesystem-root-follow-ups` | 允许工作目录为 `/` 的现有本地任务继续发送消息 | [文档](linux-features/filesystem-root-follow-ups/README.md) |
 | `flatpak-chrome-native-messaging` | 将官方 Chrome 扩展连接到 Flatpak Google Chrome | [文档](linux-features/flatpak-chrome-native-messaging/README.md) |
@@ -268,6 +282,7 @@ Nix 用户应从 profile、Home Manager 配置或 NixOS module 中删除该包�
 | `project-task-sort` | 恢复 alternate Projects 的 Created 排序 | [文档](linux-features/project-task-sort/README.md) |
 | `read-aloud` | 为 assistant response 添加 Linux 朗读控件 | [文档](linux-features/read-aloud/README.md) |
 | `read-aloud-mcp` | 让 agent 通过 Linux Read Aloud backend 发声 | [文档](linux-features/read-aloud-mcp/README.md) |
+| `reasoning-visibility` | 在常规设置中添加默认关闭且已翻译的推理摘要开关；重启后生效 | [文档](linux-features/reasoning-visibility/README.md) |
 | `record-and-replay` | 将 Linux 操作演示录制为可复用 skill | [文档](linux-features/record-and-replay/README.md) |
 | `remote-control-ui` | 显示实验性 remote-control 设置 | [文档](linux-features/remote-control-ui/README.md) |
 | `remote-mobile-control` | 实验性 Linux remote-host / outbound-control flow | [文档](linux-features/remote-mobile-control/README.md) |
@@ -352,9 +367,11 @@ manifest。已知 retired ID 会被忽略以迁移旧配置；任意未知 ID �
 
 ## 更新
 
-原生包默认包含 `codex-update-manager`。其 user service 使用同一签名 APT
+deb、RPM 和 pacman 包默认包含 `codex-update-manager`。其 user service 使用同一签名 APT
 metadata 检查更新，按 version/architecture/SHA-256 缓存官方包，使用当前启用
-扩展重建原生包，并等待应用退出后再切换。上一份已管理软件包会保留用于回滚。
+扩展在独立 workspace 中重建原生包，并等待受管应用退出后授权包管理器安装。
+持久事务用于恢复中断或部分完成的安装；此流程不使用手动生成树重建的目录原子交换。
+上一份已管理软件包会保留用于回滚。
 
 ```bash
 codex-update-manager status
@@ -386,7 +403,8 @@ PACKAGE_WITH_UPDATER=0 make package
 make install
 ```
 
-AppImage 与仓库内生成应用不包含原生包 updater。参阅[更新器](docs/updater.md)。
+AppImage、仓库内生成应用、Nix 和手动更新的 Gentoo 产物不使用此原生包 updater。
+参阅[更新器](docs/updater.md)。
 
 ## 在 GitHub 网页同步并构建
 
@@ -437,12 +455,12 @@ make appimage
 | 官方与 Community 启动互相影响 | 完全退出所有 `ChatGPT` 进程；两者共享上游 profile |
 | Flatpak Chrome 能打开 AppImage，但扩展显示 `Native transport disconnected` | 启用 `flatpak-chrome-native-messaging`；参阅 [Flatpak Chrome 设置](docs/troubleshooting.md#appimage-opens-from-flatpak-chrome-but-the-extension-cannot-connect) |
 | 迁移后 Browser/Chrome extension 无法连接 | 完全退出 ChatGPT 与 Chrome，再按[故障排除](docs/troubleshooting.md#browser-or-chrome-plugin-is-visible-but-cannot-connect)执行窄范围 cache repair |
-| 签名或软件包验证失败 | 不要绕过；检查系统时间、网络、`gpgv`、architecture 和磁盘空间 |
+| 签名或软件包验证失败 | 检查系统时间、网络、`gpgv`、architecture 和磁盘空间；有意进行未验证的本地构建时，必须显式传入文档中的开关 |
 | 应用无法启动 | 运行 `/opt/codex-desktop/start.sh --diagnose` |
 | 应用使用 XWayland，或需要持久化 Electron 参数 | 确认为 Wayland 会话时会自动选择原生后端；可用 `CODEX_OZONE_PLATFORM=x11\|wayland` 固定后端，或在 `~/.config/codex-desktop/electron-flags.conf` 中每行写一个参数，例如 `--ozone-platform=x11` |
 | AppImage 报 sandbox 错误 | 启用 user namespaces 或安装原生包；不会自动添加 `--no-sandbox` |
 | 上游更新后启用扩展发生 drift | 禁用该扩展确认 clean baseline，并在 issue 中附上 patch report |
-| updater 等待应用退出 | 关闭官方与 Community 进程，检查 `codex-update-manager status --json` |
+| updater 等待应用退出 | 关闭受管应用（默认 `/opt/codex-desktop/ChatGPT`）；用 `codex-update-manager diagnose --json` 检查 `appExecutable` 和 `appRunning` |
 | 旧 `codex-app.backup-*` 出现权限错误 | 先确认精确路径，再按 root-owned backup 流程处理；不要盲删 wildcard |
 
 完整指南：[故障排除](docs/troubleshooting.md)。

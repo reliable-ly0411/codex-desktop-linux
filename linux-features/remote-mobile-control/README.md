@@ -57,8 +57,12 @@ not been tested.
 
 What it changes:
 
-- Replaces the upstream native `remote-control-device-key.node` path with a
-  Linux JavaScript ECDSA P-256 key provider.
+- Replaces the upstream native `remote-control-device-key.node` addon with a
+  Linux JavaScript ECDSA P-256 key store. The upstream device-key provider
+  still serializes and validates every signing payload; only its addon is
+  swapped.
+- Adds the bare `Remote-control client key material missing` 403 detail to the
+  upstream re-enrollment predicate, which only recognizes the prefixed form.
 - Lets the remote-control Connections UI render on Linux when upstream marks
   the feature unavailable or withholds the remote-control visibility rollout.
 - Keeps the `Control other devices` settings tab reachable on Linux so this
@@ -159,7 +163,8 @@ feature descriptor to appear exactly once in this table.
 | `linux-remote-control-status-read-guard` | `shared-boundary` | Sends `remoteControl/status/read` only to the local host, never Remote SSH or remote-control environment hosts. |
 | `linux-remote-control-status-wait` | `shared-boundary` | Gives the selected host a Linux-specific connection convergence window without changing host ownership. |
 | `linux-remote-control-enable-for-host-params` | `shared-boundary` | Uses the current enable/disable RPC parameter contract without choosing which host is targeted. |
-| `linux-remote-control-enablement-bridge` | `shared-boundary` | Loads outbound clients and auto-connects the remote-control environment owned by this Desktop without overwriting saved choices for other hosts. |
+| `linux-remote-control-enablement-bridge` | `shared-boundary` | Enables the current outbound remote-connections service on Linux without changing its service-owned auto-connect choices. |
+| `linux-remote-control-auto-connect-contract` | `outbound-control` | Validates the unique upstream service and settings caller that preserve an explicit auto-connect choice. |
 | `linux-remote-mobile-active-status` | `mobile-host` | Derives mobile active state from the local thread runtime. |
 
 The current upstream Connections bundle explicitly returns no action for
@@ -196,13 +201,10 @@ The main RPC boundaries are:
 - local host: `remoteControl/enable`, `remoteControl/disable`,
   `remoteControl/pairing/start`, `remoteControl/status/read`, and
   `remoteControl/status/changed`;
-- outbound Connections: `set-remote-control-connections-enabled`,
-  `refresh-remote-control-connections`, and
-  `set-remote-connection-auto-connect`;
-- shared host routing: `set-experimental-feature-enablement-for-host`,
-  `refresh-remote-connections`, and `get-global-state` for the local
-  installation identity used by auto-connect;
-- Remote SSH: the existing `install-codex` action and its release parameter.
+- outbound Connections: the current `remoteConnections` service methods
+  `setRemoteControlEnabled`, `refreshRemoteControl`, and `setAutoConnect`;
+- shared host routing: `set-experimental-feature-enablement-for-host`
+  and `refresh-remote-connections`.
 
 Remote mobile daemon requirement:
 
@@ -311,3 +313,14 @@ Run the feature tests with:
 ```bash
 node --test linux-features/remote-mobile-control/test.js
 ```
+
+## Catalog subfeatures
+
+The community feature catalog lists these user-facing capabilities separately:
+
+- **Mobile Remote host** (`mobile-host`): Adapt this Linux installation for experimental mobile Remote hosting, subject to account and pairing requirements.
+- **Control other devices** (`outbound-control`): Expose outbound Remote enrollment and connection discovery without bypassing account authorization.
+
+These declarations use `enabledWhen: "parent"`: all are included whenever this
+feature is built. They add no independent configuration switches and do not
+report runtime activation, permissions, external dependencies or backend health.

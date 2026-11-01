@@ -1,6 +1,6 @@
 use crate::windowing::registry::{
     self, COSMIC_WAYLAND_BACKEND, GNOME_SHELL_EXTENSION_BACKEND, GNOME_SHELL_INTROSPECT_BACKEND,
-    HYPRLAND_BACKEND, I3_BACKEND, KWIN_BACKEND, NIRI_BACKEND, X11_BACKEND,
+    HYPRLAND_BACKEND, I3_BACKEND, KWIN_BACKEND, LABWC_BACKEND, NIRI_BACKEND, X11_BACKEND,
 };
 use crate::ydotool;
 use schemars::JsonSchema;
@@ -151,6 +151,7 @@ pub struct AccessibilityReport {
     pub toolkit_accessibility: Check,
     pub at_spi_enabled: Check,
     pub screen_reader_enabled: Check,
+    pub forced_toolkit_bridge: bool,
 }
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]
@@ -180,6 +181,8 @@ pub struct InputReport {
     pub xdotool: Check,
     /// Wayland virtual-keyboard backend for layout-safe Unicode literal text.
     pub wtype: Check,
+    /// Selkies pixelflux computer-use server. Detail is the port only.
+    pub pixelflux: Check,
 }
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]
@@ -298,7 +301,7 @@ pub fn doctor_report() -> DoctorReport {
         &accessibility,
         &windowing,
         &input,
-        !screenshot_backends(&platform, &portals, &windowing).is_empty(),
+        !screenshot_backends(&platform, &portals, &windowing, &input).is_empty(),
     );
 
     let capabilities = capability_map_with_portal_keyboard(
@@ -350,8 +353,11 @@ fn capability_map_with_portal_keyboard(
     input: &InputReport,
 ) -> CapabilityMap {
     let mut input_backends = Vec::new();
+    if input.pixelflux.ok {
+        input_backends.push("pixelflux".to_string());
+    }
     // Absolute uinput pointer: accurate, non-blocking of coordinates; preferred.
-    if input.uinput.ok {
+    if input.uinput.ok && platform_is_wayland(platform) && !is_cosmic_wayland_platform(platform) {
         input_backends.push("abs_pointer".to_string());
     }
     let force_ydotool = env_flag_enabled_any(FORCE_YDOTOOL_KEYBOARD_ENV_KEYS);
@@ -381,17 +387,21 @@ fn capability_map_with_portal_keyboard(
     ) {
         input_backends.push("wtype".to_string());
     }
-    if portal_available && portal_forced_for_all_input {
+    let portal_first = portal_forced_for_all_input
+        || (is_cosmic_wayland_platform(platform)
+            && portal_pointer_available
+            && !env_flag_enabled_any(FORCE_YDOTOOL_POINTER_ENV_KEYS));
+    if portal_available && portal_first {
         input_backends.push("portal".to_string());
     }
     if input.ydotool.ok && input.ydotool_socket.ok {
         input_backends.push("ydotool".to_string());
     }
-    if portal_available && !portal_forced_for_all_input {
+    if portal_available && !portal_first {
         input_backends.push("portal".to_string());
     }
 
-    let screenshot_backends = screenshot_backends(platform, portals, windowing);
+    let screenshot_backends = screenshot_backends(platform, portals, windowing, input);
 
     let mut window_backends = Vec::new();
     let x11_available = windowing
@@ -422,15 +432,17 @@ fn capability_map_with_portal_keyboard(
     if windowing.niri.ok {
         window_backends.push(NIRI_BACKEND.to_string());
     }
-    // i3 and the generic X11/EWMH backend have no dedicated
+    // i3, labwc and the generic X11/EWMH backend have no dedicated
     // WindowingReport field; read them from the probe map so the capability
     // list matches the registry order.
-    if windowing
-        .backends
-        .get(I3_BACKEND)
-        .is_some_and(|check| check.ok)
-    {
-        window_backends.push(I3_BACKEND.to_string());
+    for backend in [I3_BACKEND, LABWC_BACKEND] {
+        if windowing
+            .backends
+            .get(backend)
+            .is_some_and(|check| check.ok)
+        {
+            window_backends.push(backend.to_string());
+        }
     }
     if x11_available && !prefer_x11_over_introspect {
         window_backends.push(X11_BACKEND.to_string());
@@ -874,6 +886,7 @@ fn accessibility_report() -> AccessibilityReport {
         ),
         at_spi_enabled: at_spi_enabled_check(),
         screen_reader_enabled: screen_reader_enabled_check(),
+        forced_toolkit_bridge: toolkit_bridge_forced(),
     }
 }
 
@@ -940,7 +953,7 @@ fn windowing_report(platform: &PlatformReport) -> WindowingReport {
             "A window listing backend is available for list_windows, focused_window, and targeted input verification."
         }
     } else {
-        "Window listing is unavailable or denied. Computer Use can still use screenshots, AT-SPI, and global ydotool input, but targeted window input cannot be verified. On GNOME, run setup_window_targeting to install the optional GNOME Shell extension backend. On COSMIC, ensure the bundled COSMIC helper is present and can connect to the session. On KDE/Plasma, ensure KWin exposes org.kde.KWin scripting on the session bus. On Hyprland, ensure hyprctl is available in the session. On niri, export the session's NIRI_SOCKET or expose an unambiguous matching socket in XDG_RUNTIME_DIR; the niri binary is optional."
+        "Window listing is unavailable or denied. Computer Use can still use screenshots, AT-SPI, and global ydotool input, but targeted window input cannot be verified. On GNOME, run setup_window_targeting to install the optional GNOME Shell extension backend. On COSMIC, ensure the bundled COSMIC helper is present and can connect to the session. On KDE/Plasma, ensure KWin exposes org.kde.KWin scripting on the session bus. On Hyprland, ensure hyprctl is available in the session. On niri, export the session's NIRI_SOCKET or expose an unambiguous matching socket in XDG_RUNTIME_DIR; the niri binary is optional. On labwc, the Selkies IPC socket labwc.sock lists windows."
     }
     .to_string();
 
@@ -968,6 +981,25 @@ fn check_from_backend_probe(probe: &registry::BackendProbe) -> Check {
     }
 }
 
+fn pixelflux_check() -> Check {
+    let Some(config) = crate::pixelflux::PixelfluxConfig::from_env() else {
+        return Check::fail("PIXELFLUX_CU is not set");
+    };
+    let port = config.port;
+    let probed = std::thread::spawn(move || {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .ok()?;
+        runtime.block_on(crate::pixelflux::probe(&config)).ok()
+    })
+    .join();
+    match probed {
+        Ok(Some(())) => Check::ok(port.to_string()),
+        _ => Check::fail(format!("{port} unreachable")),
+    }
+}
+
 fn input_report() -> InputReport {
     InputReport {
         ydotool: match ydotool::ensure_supported() {
@@ -979,6 +1011,7 @@ fn input_report() -> InputReport {
         uinput: read_write_path_check(Path::new("/dev/uinput")),
         xdotool: command_path_check("xdotool"),
         wtype: command_path_check("wtype"),
+        pixelflux: pixelflux_check(),
     }
 }
 
@@ -996,7 +1029,7 @@ fn readiness_report(
         accessibility,
         windowing,
         input,
-        !screenshot_backends(platform, portals, windowing).is_empty(),
+        !screenshot_backends(platform, portals, windowing, input).is_empty(),
     )
 }
 
@@ -1006,8 +1039,12 @@ fn screenshot_backends(
     platform: &PlatformReport,
     portals: &PortalReport,
     windowing: &WindowingReport,
+    input: &InputReport,
 ) -> Vec<String> {
     let mut backends = Vec::new();
+    if input.pixelflux.ok {
+        backends.push("pixelflux".to_string());
+    }
     if platform.gnome_shell_version.ok {
         backends.push("gnome_shell".to_string());
     }
@@ -1044,11 +1081,10 @@ fn readiness_report_with_portal_keyboard(
     let can_send_development_input =
         can_send_development_input(platform, remote_desktop_keyboard, input);
 
-    if !can_build_accessibility_tree {
-        blockers.push(
-            "AT-SPI accessibility is disabled; enable org.a11y.Status IsEnabled or org.gnome.desktop.interface toolkit-accessibility for tree extraction."
-                .to_string(),
-        );
+    if let Some(blocker) =
+        atspi_disabled_blocker(accessibility, accessibility.forced_toolkit_bridge)
+    {
+        blockers.push(blocker);
     }
 
     if !can_query_windows {
@@ -1134,7 +1170,8 @@ fn can_send_development_input(
 ) -> bool {
     let force_ydotool = env_flag_enabled_any(FORCE_YDOTOOL_KEYBOARD_ENV_KEYS);
     let force_xdotool = env_flag_enabled_any(FORCE_XDOTOOL_KEYBOARD_ENV_KEYS);
-    portal_keyboard_input_available(platform, remote_desktop_keyboard)
+    input.pixelflux.ok
+        || portal_keyboard_input_available(platform, remote_desktop_keyboard)
         || platform_is_wayland(platform)
             && wtype_compatible_wayland_desktop(platform.xdg_current_desktop.as_deref())
             && input.wtype.ok
@@ -1169,9 +1206,50 @@ pub(crate) fn can_build_accessibility_tree_now() -> bool {
 }
 
 fn can_build_accessibility_tree(accessibility: &AccessibilityReport) -> bool {
+    accessibility_tree_ready(accessibility, accessibility.forced_toolkit_bridge)
+}
+
+fn accessibility_tree_ready(accessibility: &AccessibilityReport, forced_bridge: bool) -> bool {
     accessibility.at_spi_bus.ok
-        && (check_detail_contains_true(&accessibility.at_spi_enabled)
+        && (forced_bridge
+            || check_detail_contains_true(&accessibility.at_spi_enabled)
             || check_detail_contains_true(&accessibility.toolkit_accessibility))
+}
+
+fn atspi_disabled_blocker(
+    accessibility: &AccessibilityReport,
+    forced_bridge: bool,
+) -> Option<String> {
+    if accessibility_tree_ready(accessibility, forced_bridge) {
+        None
+    } else {
+        Some(
+            "AT-SPI accessibility is disabled; enable org.a11y.Status IsEnabled or org.gnome.desktop.interface toolkit-accessibility for tree extraction."
+                .to_string(),
+        )
+    }
+}
+
+fn toolkit_bridge_forced() -> bool {
+    if toolkit_bridge_forced_by_env(env_var) {
+        return true;
+    }
+    let compositor = compositor_environ();
+    toolkit_bridge_forced_by_env(|key| {
+        env_var(key).or_else(|| compositor.as_ref().and_then(|vars| vars.get(key).cloned()))
+    })
+}
+
+fn toolkit_bridge_forced_by_env(vars: impl Fn(&str) -> Option<String>) -> bool {
+    vars("QT_LINUX_ACCESSIBILITY_ALWAYS_ON").is_some_and(|value| value == "1")
+        || vars("GTK_MODULES").is_some_and(|value| value.contains("atk-bridge"))
+}
+
+fn compositor_environ() -> Option<HashMap<String, String>> {
+    // Read only the process proven to own the selected Wayland connection.
+    // Another desktop or nested compositor must not enable this session's tree.
+    let pid = crate::windowing::wayland_session::compositor_pid()?;
+    read_process_environ(pid)
 }
 
 fn check_detail_contains_true(check: &Check) -> bool {
@@ -1782,8 +1860,33 @@ fn run_command(command: &str, args: &[&str], with_session_bus: bool) -> Check {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
+
+    /// A complete report for tests outside this module. With accessibility
+    /// disabled, get_app_state skips the tree and touches no desktop service.
+    pub(crate) fn doctor_report_fixture(
+        accessibility_enabled: bool,
+        windows_available: bool,
+    ) -> DoctorReport {
+        let platform = platform_report();
+        let portals = portal_report(Check::fail("missing"));
+        let accessibility = accessibility_report(
+            Check::ok("bus"),
+            Check::ok(accessibility_enabled.to_string()),
+        );
+        let windowing = windowing_report(windows_available, windows_available);
+        let input = input_report(true);
+        DoctorReport {
+            readiness: readiness_report(&platform, &portals, &accessibility, &windowing, &input),
+            capabilities: capability_map(&platform, &portals, &accessibility, &windowing, &input),
+            platform,
+            portals,
+            accessibility,
+            windowing,
+            input,
+        }
+    }
 
     #[test]
     fn describe_bool_reads_busctl_gdbus_and_gsettings_output() {
@@ -1931,7 +2034,26 @@ mod tests {
             toolkit_accessibility,
             at_spi_enabled: Check::fail("(<false>,)"),
             screen_reader_enabled: Check::fail("(<false>,)"),
+            forced_toolkit_bridge: false,
         }
+    }
+    #[test]
+    fn bus_reachable_and_forced_bridge_is_enabled() {
+        let enabled = accessibility_report(Check::ok("bus"), Check::fail("false"));
+        assert!(accessibility_tree_ready(&enabled, true));
+        assert!(atspi_disabled_blocker(&enabled, true).is_none());
+        let down = accessibility_report(Check::fail("no bus"), Check::fail("false"));
+        assert!(!accessibility_tree_ready(&down, true));
+        assert!(
+            atspi_disabled_blocker(&down, true).is_some_and(|blocker| blocker.contains("disabled"))
+        );
+        assert!(toolkit_bridge_forced_by_env(|key| {
+            (key == "QT_LINUX_ACCESSIBILITY_ALWAYS_ON").then(|| "1".to_string())
+        }));
+        assert!(toolkit_bridge_forced_by_env(|key| {
+            (key == "GTK_MODULES").then(|| "gail:atk-bridge".to_string())
+        }));
+        assert!(!toolkit_bridge_forced_by_env(|_| None));
     }
 
     fn windowing_report(can_list_windows: bool, can_focus_windows: bool) -> WindowingReport {
@@ -1981,6 +2103,7 @@ mod tests {
             uinput,
             xdotool: Check::fail("missing xdotool"),
             wtype: Check::fail("missing wtype"),
+            pixelflux: Check::fail("PIXELFLUX_CU is not set"),
         }
     }
 
@@ -2107,6 +2230,7 @@ mod tests {
             uinput: Check::fail("missing"),
             xdotool: Check::ok("xdotool"),
             wtype: Check::fail("missing wtype"),
+            pixelflux: Check::fail("PIXELFLUX_CU is not set"),
         };
 
         let capabilities = capability_map(
@@ -2119,6 +2243,18 @@ mod tests {
 
         assert_eq!(capabilities.input, ["xdotool", "ydotool"]);
         assert_eq!(capabilities.preferred.input.as_deref(), Some("xdotool"));
+    }
+
+    #[test]
+    fn pixelflux_only_desktop_is_input_ready() {
+        let platform = platform_report();
+        let mut input = input_report(false);
+        input.pixelflux = Check::ok("loopback port 8080");
+        assert!(can_send_development_input(
+            &platform,
+            &Check::fail("missing portal"),
+            &input,
+        ));
     }
 
     #[test]
@@ -2191,6 +2327,24 @@ mod tests {
     }
 
     #[test]
+    fn writable_uinput_advertises_abs_pointer_first() {
+        let platform = platform_report();
+        let portals = portal_report(Check::fail("missing"));
+        let accessibility = accessibility_report(Check::ok("bus"), Check::ok("true"));
+        let windowing = windowing_report(true, true);
+        let input = input_report_parts(
+            Check::ok("ydotool"),
+            Check::ok("ydotoold"),
+            Check::ok("connectable"),
+            Check::ok("read/write: /dev/uinput"),
+        );
+
+        let capabilities = capability_map(&platform, &portals, &accessibility, &windowing, &input);
+
+        assert_eq!(capabilities.input, ["abs_pointer", "ydotool"]);
+    }
+
+    #[test]
     fn portal_force_order_requires_both_input_modalities() {
         assert!(force_portal_for_all_input(true, true, false, false));
         assert!(!force_portal_for_all_input(true, false, false, false));
@@ -2218,6 +2372,31 @@ mod tests {
             "NAME TYPE SIGNATURE RESULT/VALUE FLAGS\n\
              .SelectSources method oa{sv} o -",
         )
+    }
+
+    #[test]
+    fn cosmic_prefers_per_monitor_portal_over_uinput_and_ydotool() {
+        let mut platform = platform_report();
+        platform.xdg_session_type = Some("wayland".to_string());
+        platform.xdg_current_desktop = Some("COSMIC".to_string());
+        let input = input_report_parts(
+            Check::ok("ydotool"),
+            Check::ok("socket"),
+            Check::ok("socket"),
+            Check::ok("uinput"),
+        );
+        let capabilities = capability_map(
+            &platform,
+            &portal_report(Check::ok("portal")),
+            &accessibility_report(Check::ok("bus"), Check::ok("true")),
+            &windowing_report(true, true),
+            &input,
+        );
+        assert_eq!(capabilities.preferred.input.as_deref(), Some("portal"));
+        assert!(!capabilities
+            .input
+            .iter()
+            .any(|backend| backend == "abs_pointer"));
     }
 
     #[test]
@@ -2426,6 +2605,7 @@ mod tests {
             uinput: Check::fail("missing"),
             xdotool: Check::ok("xdotool"),
             wtype: Check::fail("missing wtype"),
+            pixelflux: Check::fail("PIXELFLUX_CU is not set"),
         };
 
         let capabilities = capability_map(

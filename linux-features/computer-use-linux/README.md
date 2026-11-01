@@ -21,6 +21,12 @@ desktops, dependencies, permissions, and troubleshooting.
 
 ## Supported operations
 
+The embedded backend tracks standalone computer-use-linux v0.7.33. GNOME
+scaled pointer sessions use portal EIS regions when available and retain the
+legacy route when negotiation fails. Selkies containers can set `PIXELFLUX_CU`
+and `PIXELFLUX_CU_TOKEN` to use their loopback computer-use API for capture and
+input. Input with an uncertain outcome is reported without automatic replay.
+
 The in-app API supports window listing, accessibility inspection, screenshots,
 coordinate clicks, keyboard input, text entry, and scrolling. Use the IDs returned
 by `cua.listApps()` with `cua.getApp()`.
@@ -42,8 +48,13 @@ The adapter combines native inventory with upstream's public browser APIs so
 Later `getAXState()`
 calls omit an unchanged compact projection; pass `disableDiffing: true` for a fresh
 compact tree or `compact: false` for the complete backend node metadata. Bound
-tree traversal with `maxNodes` (1–2000) and `maxDepth` (0–64). The equivalent
+tree traversal with `maxNodes` (1–10000) and `maxDepth` (0–64). The equivalent
 `max_nodes` and `max_depth` spellings are accepted for direct backend parity.
+When the backend returns a large tree as its leading nodes, the host service pages
+the rest from the backend's cached snapshot with `get_tree_page` and returns the
+whole tree. If it would not fit the host bridge, the result keeps what fits, sets
+`accessibility_tree_truncated`, and says so in `accessibility_tree_note`.
+`accessibility_tree_truncated` is also set when traversal itself stopped early.
 
 Screenshot methods emit their image, so do not emit the returned bytes again.
 They accept `maxWidth`, `maxHeight`, `maxBytes`, `scale`, `format`, and `quality`;
@@ -65,6 +76,14 @@ The separate `computer-use` component stores the Any App setting and exposes no
 MCP tools. Upstream owns browser control. Missing or ambiguous bundle contracts
 abort an enabled build.
 
+The current signed app's `nativeApplications` service supplies the native app
+picker. On Linux this feature uses the running-window backend and desktop-entry
+icons. It returns at most 20 running apps. Default and usage ordering put focused
+apps first; display-name ordering sorts that inventory alphabetically. It does
+not provide an installed-app catalog, usage history, or date-based filtering.
+The service preserves its array, nullable lookup, and icon-size contracts.
+The macOS and Windows implementations remain upstream-owned.
+
 `make install-native` builds `codex-computer-use-linux` and
 `codex-computer-use-cosmic` and `codex-computer-use-indicator` once before staging the package. Direct
 `./install.sh` builds may provide binaries in `target/release/` or set
@@ -77,3 +96,14 @@ Validate descriptor ownership and artifact-only staging with:
 ```bash
 node --test linux-features/computer-use-linux/test.js linux-features/computer-use-linux/*.test.js
 ```
+
+## Catalog subfeatures
+
+The community feature catalog lists these user-facing capabilities separately:
+
+- **Native computer control** (`native-control`): Ship the native computer-use bridge and backend; Any App access still requires runtime enablement and OS permissions.
+- **Running application picker** (`running-app-picker`): Populate the native application picker with running Linux windows and desktop-entry icons.
+
+These declarations use `enabledWhen: "parent"`: all are included whenever this
+feature is built. They add no independent configuration switches and do not
+report runtime activation, permissions, external dependencies or backend health.
