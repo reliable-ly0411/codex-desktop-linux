@@ -62,6 +62,10 @@ async function main() {
       summary("This official package is already published; wrapper/source changes do not republish it.");
       return;
     }
+    if (pages.flat().some(r => r.tag_name === `official-${upstreamKey}` && r.draft)) {
+      summary("Unpublished draft requires recovery of the original artifact/run; it has NOT been published.");
+      throw Error("Pending draft cannot be rebuilt or silently skipped; recover original candidate artifacts");
+    }
     if (!isNewPackage) {
       fs.appendFileSync(process.env.GITHUB_OUTPUT, "build=false\n");
       summary("Official package already observed in verified baseline/history; no historical backfill.");
