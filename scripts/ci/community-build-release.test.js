@@ -5,6 +5,7 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const crypto = require("node:crypto");
+const { officialIdentity, historyMarker, REPOSITORY } = require("./community-official-trigger.js");
 const { chooseRelease, publish } = require("./community-build-release.js");
 const key = "a".repeat(64);
 const source = "b".repeat(40);
@@ -32,23 +33,26 @@ test("draft, incomplete and invalid releases never suppress a build", () => {
 function fixture(mode, run) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "community-release-test-"));
   try {
-    const plan = { key, source, metadata: { architecture: "amd64", version: "26.930.1", sha256: "d".repeat(64) } };
+    const plan = { key, source, metadata: { architecture: "amd64", version: "26.930.1", sha256: "d".repeat(64), repository: REPOSITORY, package: "chatgpt", signatureFingerprint: "A".repeat(40), inReleaseSha256: "e".repeat(64), packagesSha256: "f".repeat(64) } };
+    plan.upstreamKey = officialIdentity(plan.metadata);
     const dir = path.join(root, "assets"); fs.mkdirSync(dir);
     fs.writeFileSync(path.join(dir, deb), "test package");
     fs.writeFileSync(path.join(dir, "README.txt"), "instructions");
-    fs.writeFileSync(path.join(dir, "build-info.json"), JSON.stringify({ key, source, deb, workflowRun: "123" }));
+    fs.writeFileSync(path.join(dir, "build-info.json"), JSON.stringify({ key, source, upstreamKey: plan.upstreamKey, metadata: plan.metadata, deb, workflowRun: "123" }));
     const hash = (file) => crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex");
     fs.writeFileSync(path.join(dir, "SHA256SUMS"), [deb, "README.txt", "build-info.json"].map((n) =>
       `${hash(path.join(dir, n))}  ${n}\n`).join(""));
-    const assets = files.map((name) => ({ name, state: "uploaded", size: fs.statSync(path.join(dir, name)).size,
+    const assets = files.map((name, index) => ({ id: index+1, name, state: "uploaded", size: fs.statSync(path.join(dir, name)).size,
       digest: `sha256:${hash(path.join(dir, name))}` }));
     let state = null;
     const calls = [];
-    const tag = "v2026.10.06.123456-amd64";
-    if (mode === "resume") state = { id: 42, tag_name: tag, body: marker, target_commitish: source, draft: true, assets: [] };
+    const tag = `official-${plan.upstreamKey}`;
+    if (mode === "resume") state = { id: 42, tag_name: tag, body: marker + "\n" + historyMarker(plan.metadata), target_commitish: source, draft: true, assets: [] };
     const io = {
+      policy: { baselinePackages: [{...plan.metadata, version: "26.929.1"}], redistributionApprovals: [{ version: "26.930.1", packageSha256: "d".repeat(64), architecture: "amd64", permission: "redistribute-repackaged-payload", reviewedBy: "test-only", evidenceUrl: "https://example.invalid/test-only" }] },
       gh(args) {
         calls.push(args);
+        if (args[0] === "api" && args.at(-1).includes("/releases/assets/")) return fs.readFileSync(path.join(dir,"build-info.json"),"utf8");
         if (args[0] === "api") return JSON.stringify([state ? [state] : []]);
         if (args[1] === "create") {
           assert.ok(args.includes("--draft"));
@@ -56,6 +60,7 @@ function fixture(mode, run) {
           state = { id: 42, tag_name: tag, body: fs.readFileSync(args[args.indexOf("--notes-file") + 1], "utf8"),
             target_commitish: source, draft: true, prerelease: false, assets: [], html_url: "https://github.com/release" };
         } else if (args[1] === "upload") {
+          assert.equal(args.includes("--clobber"), false);
           assert.equal(state.draft, true, "upload must happen before publication");
           if (mode === "upload-error") throw Error("network interrupted");
           state.assets = structuredClone(assets);
@@ -67,7 +72,7 @@ function fixture(mode, run) {
         } else throw Error(`Unexpected command ${args}`);
         return "";
       },
-      api() { calls.push(["read-assets"]); return structuredClone(state); },
+      api(endpoint) { if (endpoint.includes("matching-refs")) return []; calls.push(["read-assets"]); return structuredClone(state); },
     };
     run({ plan, env: { GITHUB_REPOSITORY: "reliable-ly0411/codex-desktop-linux", GITHUB_RUN_ID: "123",
       BUILD_STATE_DIR: root, COMMUNITY_ARTIFACT_DIR: dir }, io, calls, getState: () => state });
@@ -83,7 +88,7 @@ for (const mode of ["new", "resume"]) test(`publish ${mode}: draft, upload, veri
     assert.ok(upload < check && check < edit);
     const before = calls.length;
     publish(plan, env, io);
-    assert.equal(calls.length, before + 1, "retry of published release does not overwrite assets");
+    assert.equal(calls.length, before + 2, "retry of published release does not overwrite assets");
   });
 });
 for (const mode of ["upload-error", "bad-digest"]) test(`publish ${mode}: leaves only a draft`, () => {

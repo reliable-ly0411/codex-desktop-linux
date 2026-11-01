@@ -117,6 +117,7 @@ function verifySigningKey(keyPath, expectedFingerprint = EXPECTED_FINGERPRINT) {
     "gpg", ["--batch", "--show-keys", "--with-colons", keyPath],
     { encoding: "utf8" },
   );
+  if (result.error) throw result.error;
   if (result.status !== 0) throw new Error(`Could not inspect pinned signing key: ${result.stderr.trim()}`);
   const fingerprints = result.stdout.split(/\r?\n/)
     .filter((line) => line.startsWith("fpr:"))
@@ -132,6 +133,7 @@ function verifyInRelease(inReleasePath, keyPath, expectedFingerprint = EXPECTED_
     "gpgv", ["--keyring", keyPath, inReleasePath],
     { encoding: "utf8" },
   );
+  if (result.error) throw result.error;
   if (result.status !== 0) throw new Error(`InRelease signature verification failed: ${result.stderr.trim()}`);
   return extractClearSignedPayload(fs.readFileSync(inReleasePath, "utf8"));
 }
@@ -165,7 +167,9 @@ async function resolveOfficialPackage(options) {
     await download(`${repository}/${metadata.repositoryPath}`, packagePath);
     verifyIndexedFile(packagePath, metadata, path.basename(packagePath));
   }
-  const result = { ...metadata, repository, path: packagePath };
+  const result = { ...metadata, repository, path: packagePath,
+    signatureFingerprint: EXPECTED_FINGERPRINT, inReleaseSha256: sha256File(inReleasePath),
+    packagesSha256: indexedPackages.sha256 };
   fs.writeFileSync(options.metadataPath, `${JSON.stringify(result, null, 2)}\n`);
   return result;
 }

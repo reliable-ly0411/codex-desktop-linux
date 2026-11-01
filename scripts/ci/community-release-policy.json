@@ -1,0 +1,27 @@
+{
+  "trigger": "official-signed-stable-package",
+  "redistributionApprovals": [],
+  "baselineObservedAt": "2026-11-01T05:05:26Z",
+  "baselinePackages": [
+    {
+      "repository": "https://persistent.oaistatic.com/codex-app-prod/linux/deb",
+      "package": "chatgpt",
+      "version": "26.1027.51404",
+      "architecture": "amd64",
+      "sha256": "46f1e22d028698fe9edaefd5847aece07c4509a30d3709e104220719d8c12822",
+      "inReleaseSha256": "3902c4d60c094310b72210c67f370ac1a72f72f23cc71b2ff32e1565a38577dc",
+      "packagesSha256": "8ac07e4e5f338d4506590bdc63fc08ad4403fc1b0b0061f3da0af3743059715b",
+      "signatureFingerprint": "3BFA0E4AE8B8CC16A2D9BA684A3B4A566C4660E4"
+    },
+    {
+      "repository": "https://persistent.oaistatic.com/codex-app-prod/linux/deb",
+      "package": "chatgpt",
+      "version": "26.1027.51404",
+      "architecture": "arm64",
+      "sha256": "2c2ba5cd2f5c13de5f5d93a5e1623fbb61ea4b3556571e5f7431a570f17f8fea",
+      "inReleaseSha256": "3902c4d60c094310b72210c67f370ac1a72f72f23cc71b2ff32e1565a38577dc",
+      "packagesSha256": "1be85a1a1c93725f028a51a1ea8dca669c9e51b7cc879751f19869b88e8caf2c",
+      "signatureFingerprint": "3BFA0E4AE8B8CC16A2D9BA684A3B4A566C4660E4"
+    }
+  ]
+}

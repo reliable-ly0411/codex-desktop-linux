@@ -7,14 +7,15 @@ run-name: Community deb · ${{ github.event_name }} · ${{ inputs.architecture |
     - cron: '23 */6 * * *'
   workflow_dispatch:
     inputs:
+      run_mode:
+        description: Sync-only never resolves, builds, uploads or publishes a package
+        type: choice
+        options: [sync-only, release-candidate]
+        default: sync-only
       sync_upstream:
         description: Sync upstream before building / 先同步上游
         type: boolean
         default: true
-      force_rebuild:
-        description: Rebuild and publish even if a Release exists / 强制重建
-        type: boolean
-        default: false
       architecture:
         description: Package architecture / 安装包架构
         type: choice
@@ -24,7 +25,7 @@ run-name: Community deb · ${{ github.event_name }} · ${{ inputs.architecture |
     branches: [main]
     paths:
       - .github/workflows/sync-upstream.yml
-      - scripts/ci/community-build*
+      - scripts/ci/community-*
       - scripts/ci/sync-community-fork.sh
 
 permissions:
@@ -47,6 +48,7 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
           persist-credentials: false
+          fetch-depth: 0
       - name: Sync main without force and record its exact commit
         id: sync
         env:
@@ -55,8 +57,31 @@ jobs:
           SYNC_UPSTREAM: ${{ github.event_name != 'workflow_dispatch' || inputs.sync_upstream }}
         run: bash scripts/ci/sync-community-fork.sh
 
-  build:
+  verify:
     needs: sync
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          ref: ${{ needs.sync.outputs.source_sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 24
+      - name: Offline orchestration and signature-fixture checks
+        run: |
+          node --test scripts/ci/community-*.test.js scripts/lib/upstream-linux-package.test.js
+          bash -n scripts/ci/sync-community-fork.sh scripts/ci/community-build-deb.sh
+      - name: Report explicit sync-only completion
+        if: github.event_name == 'workflow_dispatch' && inputs.run_mode == 'sync-only'
+        run: echo 'Sync-only completed. No official package was resolved, built, uploaded or published.' >> "$GITHUB_STEP_SUMMARY"
+
+  build:
+    needs: [sync, verify]
+    if: github.event_name != 'workflow_dispatch' || inputs.run_mode == 'release-candidate'
     strategy:
       fail-fast: false
       matrix:
@@ -68,7 +93,6 @@ jobs:
     env:
       SOURCE_SHA: ${{ needs.sync.outputs.source_sha }}
       BUILD_ARCH: ${{ matrix.architecture }}
-      FORCE_REBUILD: ${{ inputs.force_rebuild || false }}
       CODEX_LINUX_FEATURES_CONFIG: ${{ github.workspace }}/linux-features/features.example.json
       PACKAGE_WITH_UPDATER: '1'
       CARGO_INCREMENTAL: '0'
@@ -76,6 +100,7 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
           ref: ${{ needs.sync.outputs.source_sha }}
+          fetch-depth: 0
           persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
@@ -103,7 +128,7 @@ jobs:
           # Isolate executable-replacement fixtures from parallel process spawns (ETXTBSY).
           cargo test --locked -p codex-update-manager -- --test-threads=1
           cargo clippy --locked -p codex-update-manager --all-targets -- -D warnings
-          node --test scripts/ci/community-build*.test.js scripts/lib/upstream-linux-package.test.js linux-features/appshots/test.js
+          node --test scripts/ci/community-*.test.js scripts/lib/upstream-linux-package.test.js linux-features/appshots/test.js
           bash -n scripts/ci/sync-community-fork.sh scripts/ci/community-build-deb.sh
       - name: Build and verify installable deb with automatic cache cleanup
         if: steps.plan.outputs.build == 'true'

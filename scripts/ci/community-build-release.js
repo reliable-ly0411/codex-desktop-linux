@@ -3,6 +3,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const crypto = require("node:crypto");
 const { execFileSync } = require("node:child_process");
+const { officialIdentity, requireLicense, checkPackageUpdate, historyMarker, verifyPublishedHistory, POLICY } = require("./community-official-trigger.js");
 const REPO = "reliable-ly0411/codex-desktop-linux";
 const marker = (key) => `<!-- community-build-key:${key} -->`;
 const hash = (file) => crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex");
@@ -29,13 +30,15 @@ function verifyAssets(release, expected) {
 }
 function notes(plan, deb, runId) {
   return `${marker(plan.key)}
+<!-- official-package:${plan.upstreamKey} -->
+${historyMarker(plan.metadata)}
 ## 本次发布 / Release
 
 ChatGPT Community 社区构建，基于 OpenAI 官方 Linux 包 **${plan.metadata.version}**，架构 **${plan.metadata.architecture}**。
 
 ### 更新内容
 
-- 源码提交、官方签名包或功能配置变化时自动构建并发布；无变化时复用已发布的 Release。
+- 仅官方签名稳定安装包更新触发发布；每个版本、架构和payload SHA只发布一次，普通wrapper源码变化不单独触发。
 - 包含自动更新器及缓存清理：保护当前版本、待安装版本和一份回退备份。
 - 默认关闭可选 Linux 功能；构建来源与配置哈希见 \`build-info.json\`。
 
@@ -73,12 +76,16 @@ function publish(plan, env = process.env, io = {}) {
   if (!/^[a-f0-9]{64}$/.test(plan.key) || !/^[a-f0-9]{40}$/.test(plan.source)
       || !["amd64", "arm64"].includes(plan.metadata.architecture)
       || !/^\d+$/.test(env.GITHUB_RUN_ID)) throw Error("Invalid release identity");
+  if (officialIdentity(plan.metadata) !== plan.upstreamKey) throw Error("Official identity mismatch");
+  const policy = io.policy || JSON.parse(fs.readFileSync(POLICY, "utf8"));
+  requireLicense(policy, plan.metadata);
   const gh = io.gh || ((args) => execFileSync("gh", args, { encoding: "utf8", maxBuffer: 32 * 1024 * 1024 }));
   const api = io.api || ((endpoint) => JSON.parse(gh(["api", endpoint])));
   const dir = path.resolve(env.COMMUNITY_ARTIFACT_DIR || "community-artifacts");
   const info = JSON.parse(fs.readFileSync(path.join(dir, "build-info.json"), "utf8"));
   const match = /^codex-desktop_([0-9.]+)_(amd64|arm64)\.deb$/.exec(info.deb);
   if (!match || match[2] !== plan.metadata.architecture || info.key !== plan.key
+      || info.upstreamKey !== plan.upstreamKey
       || info.source !== plan.source || info.workflowRun !== env.GITHUB_RUN_ID) throw Error("Build provenance mismatch");
   const names = [info.deb, "SHA256SUMS", "build-info.json", "README.txt"].sort();
   if (JSON.stringify(fs.readdirSync(dir).sort()) !== JSON.stringify(names)) throw Error("Unexpected release files");
@@ -86,12 +93,18 @@ function publish(plan, env = process.env, io = {}) {
   execFileSync("sha256sum", ["-c", "SHA256SUMS"], { cwd: dir, stdio: "pipe" });
   const expected = names.map((name) => ({ name, size: fs.statSync(path.join(dir, name)).size,
     sha256: hash(path.join(dir, name)) }));
-  const tag = `v${match[1]}-${match[2]}`;
+  const tag = `official-${plan.upstreamKey}`;
   const body = notes(plan, info.deb, env.GITHUB_RUN_ID);
   const notesFile = path.join(path.resolve(env.BUILD_STATE_DIR), "release-notes.md");
   fs.writeFileSync(notesFile, body);
-  const lookup = () => JSON.parse(gh(["api", "--paginate", "--slurp", `repos/${REPO}/releases?per_page=100`]))
-    .flat().find((r) => r.tag_name === tag);
+  const lookup = () => {
+    const releases = JSON.parse(gh(["api", "--paginate", "--slurp", `repos/${REPO}/releases?per_page=100`])).flat();
+    verifyPublishedHistory(releases, id => gh(["api", "-H", "Accept: application/octet-stream", `repos/${REPO}/releases/assets/${id}`]));
+    const isNew = checkPackageUpdate(plan.metadata, policy, releases);
+    const found = releases.find(r => r.tag_name === tag);
+    if (!isNew && !found) throw Error("Baseline package cannot be backfilled");
+    return found;
+  };
   const existing = lookup();
   if (existing) {
     if (!existing.body?.includes(marker(plan.key)) || existing.target_commitish !== plan.source) {
@@ -103,10 +116,15 @@ function publish(plan, env = process.env, io = {}) {
     }
     if ((existing.assets || []).some((a) => !names.includes(a.name))) throw Error("Unexpected draft assets");
   } else {
+    const refs = api(`repos/${REPO}/git/matching-refs/tags/${tag}`);
+    if (!Array.isArray(refs) || refs.some(r => r.ref === `refs/tags/${tag}`)) throw Error("Tag already exists without matching release; refusing to overwrite or reuse");
     gh(["release", "create", tag, "--repo", REPO, "--target", plan.source, "--draft",
       "--title", `ChatGPT Community ${match[1]} (${match[2]}) · 自动清理更新缓存`, "--notes-file", notesFile]);
   }
-  gh(["release", "upload", tag, "--repo", REPO, "--clobber", ...names.map((n) => path.join(dir, n))]);
+  const present = existing?.assets || [];
+  for (const asset of present) verifyAssets({ assets: [asset] }, [expected.find(f => f.name === asset.name)]);
+  const missing = names.filter(n => !present.some(a => a.name === n));
+  if (missing.length) gh(["release", "upload", tag, "--repo", REPO, ...missing.map((n) => path.join(dir, n))]);
   // Drafts do not necessarily have a published tag yet; address them by release ID.
   const draftInfo = lookup();
   if (!Number.isSafeInteger(draftInfo?.id)) throw Error("Release draft not found");
