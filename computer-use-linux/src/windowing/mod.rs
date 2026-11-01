@@ -2,17 +2,21 @@ pub mod backends;
 pub mod registry;
 pub mod target;
 pub mod types;
+pub(crate) mod wayland_session;
 
 #[allow(unused_imports)]
 pub use registry::{
     COSMIC_WAYLAND_BACKEND, GNOME_SHELL_EXTENSION_BACKEND, GNOME_SHELL_INTROSPECT_BACKEND,
-    HYPRLAND_BACKEND, I3_BACKEND, KWIN_BACKEND, NIRI_BACKEND, WINDOW_PERMISSION_HINT, X11_BACKEND,
+    HYPRLAND_BACKEND, I3_BACKEND, KWIN_BACKEND, LABWC_BACKEND, NIRI_BACKEND, UNAVAILABLE_BACKEND,
+    WINDOW_PERMISSION_HINT, X11_BACKEND,
 };
 #[allow(unused_imports)]
 pub use target::{
-    focus_window_target, focused_window, list_windows, resolve_window_target,
-    window_permission_hint,
+    focus_window_target, focused_window, focused_window_with_backend, list_windows,
+    resolve_window_target, window_permission_hint,
 };
+#[allow(unused_imports)]
+pub(crate) use types::app_id_leaf;
 #[allow(unused_imports)]
 pub use types::{WindowBounds, WindowFocusResult, WindowInfo, WindowTarget};
 
@@ -25,7 +29,7 @@ mod tests {
         backend_can_exact_focus, descriptors, list_note, COSMIC_WAYLAND_BACKEND,
         GNOME_SHELL_EXTENSION_BACKEND, GNOME_SHELL_INTROSPECT_BACKEND, NIRI_BACKEND,
     };
-    use super::target::ensure_backend_can_focus_target;
+    use super::target::{ensure_backend_can_focus_target, focused_in};
     use super::*;
     use crate::terminal::{TerminalProcess, TerminalWindowContext};
     use std::collections::HashMap;
@@ -53,6 +57,7 @@ mod tests {
                 HYPRLAND_BACKEND,
                 NIRI_BACKEND,
                 I3_BACKEND,
+                LABWC_BACKEND,
                 X11_BACKEND,
             ]
         );
@@ -67,6 +72,25 @@ mod tests {
     fn registry_serves_backend_list_notes() {
         assert!(list_note(COSMIC_WAYLAND_BACKEND).contains("COSMIC Wayland helper"));
         assert!(list_note("missing-backend").contains("GNOME Shell Introspect"));
+    }
+
+    #[test]
+    fn focused_query_names_the_answering_backend_without_a_focused_window() {
+        let mut unfocused = window(1, "Editor", "editor", "editor");
+        unfocused.backend = NIRI_BACKEND.to_string();
+        let mut focused = unfocused.clone();
+        focused.window_id = 2;
+        focused.focused = true;
+
+        let (backend, window) = focused_in(vec![unfocused.clone()]);
+        assert_eq!(backend, NIRI_BACKEND);
+        assert!(window.is_none());
+
+        let (backend, window) = focused_in(vec![unfocused, focused]);
+        assert_eq!(backend, NIRI_BACKEND);
+        assert_eq!(window.map(|window| window.window_id), Some(2));
+
+        assert_eq!(focused_in(Vec::new()).0, UNAVAILABLE_BACKEND);
     }
 
     fn window(window_id: u64, title: &str, app_id: &str, wm_class: &str) -> WindowInfo {
@@ -259,6 +283,104 @@ mod tests {
         .unwrap();
 
         assert_eq!(matched.window_id, 2);
+    }
+
+    #[test]
+    fn app_id_alias_matches_reverse_dns_leaf_case_insensitively() {
+        let windows = vec![window(1, "KWrite", "org.kde.kwrite", "kwrite")];
+        for app_id in ["kwrite", "KWRITE", "org.kde.kwrite"] {
+            let matched = resolve_window_target(
+                &windows,
+                &WindowTarget {
+                    app_id: Some(app_id.to_string()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            assert_eq!(matched.window_id, 1);
+        }
+
+        let ghostty = vec![window(
+            2,
+            "Ghostty",
+            "com.mitchellh.ghostty.desktop",
+            "Ghostty",
+        )];
+        assert!(resolve_window_target(
+            &ghostty,
+            &WindowTarget {
+                app_id: Some("ghostty".to_string()),
+                ..Default::default()
+            },
+        )
+        .is_ok());
+        assert!(resolve_window_target(
+            &ghostty,
+            &WindowTarget {
+                app_id: Some("desktop".to_string()),
+                ..Default::default()
+            },
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn exact_app_id_match_precedes_leaf_aliases() {
+        let windows = vec![
+            window(1, "Other KWrite", "org.kde.kwrite", "kwrite"),
+            window(2, "Exact KWrite", "kwrite", "kwrite"),
+        ];
+
+        let matched = resolve_window_target(
+            &windows,
+            &WindowTarget {
+                app_id: Some("kwrite".to_string()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(matched.window_id, 2);
+    }
+
+    #[test]
+    fn app_id_alias_rejects_ambiguous_applications() {
+        let windows = vec![
+            window(1, "KDE KWrite", "org.kde.kwrite", "kwrite"),
+            window(2, "Other KWrite", "com.example.kwrite", "kwrite"),
+        ];
+
+        let error = resolve_window_target(
+            &windows,
+            &WindowTarget {
+                app_id: Some("kwrite".to_string()),
+                ..Default::default()
+            },
+        )
+        .unwrap_err()
+        .to_string();
+
+        assert!(error.contains("matched multiple applications"));
+        assert!(error.contains("full app_id"));
+    }
+
+    #[test]
+    fn app_id_alias_allows_multiple_windows_of_one_application() {
+        let windows = vec![
+            window(1, "First", "org.kde.kwrite", "kwrite"),
+            window(2, "Second", "org.kde.kwrite", "kwrite"),
+        ];
+
+        let matched = resolve_window_target(
+            &windows,
+            &WindowTarget {
+                app_id: Some("kwrite".to_string()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(matched.window_id, 1);
     }
 
     #[test]

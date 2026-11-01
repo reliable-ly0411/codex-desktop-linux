@@ -634,10 +634,10 @@ async function readWebSocketUpgrade(child) {
   });
 }
 
-async function stopChild(child) {
+async function stopChild(child, signal = "SIGTERM") {
   if (child == null || child.exitCode != null || child.signalCode != null) return;
   const closed = new Promise((resolve) => child.once("close", resolve));
-  child.kill();
+  child.kill(signal);
   await closed;
 }
 
@@ -680,18 +680,20 @@ function loadInjectedTransport({ spawnImpl, WebSocketImpl = null, fsImpl = fs, t
   const namespace = {
     WS: WebSocketImpl ?? DefaultWebSocket,
     keepAlive() {},
+    Codec: class {},
     Adapter,
   };
   const source = sharedTransportClassSource({
-    namespace: "n",
-    webSocketClass: "WS",
-    webSocketUrl: "url",
-    keepAlive: "keepAlive",
-    adapterClass: "Adapter",
+    webSocketClass: "n.WS",
+    webSocketUrl: '"ws://localhost/rpc"',
+    keepAlive: "n.keepAlive",
+    adapterClass: "n.Adapter",
+    codecClass: "n.Codec",
+    maximumFrameBytes: "0x1000000",
+    maximumFrameHeader: '"frame-limit"',
   });
   const context = {
     n: namespace,
-    url: "ws://localhost/rpc",
     process,
     console,
     require(id) {
@@ -852,17 +854,22 @@ async function spawnOrphanAuthority(socketPath, alias = false) {
   return { pid, startTime };
 }
 
+// Mirrors the rspack/SWC-minified 26.1027 main-process chunk: double-quoted
+// strings, literal-first comparisons, `(0,ns.fn)(...)` calls, and handshake
+// constants inlined into the SSH method.
 function syntheticBundle() {
   return [
-    "var gC=class{options;kind=`websocket`;logger=i.i(`AppServerTransportSshWebsocket`);proxyStreams=new Set;hasConnected=!1;supportsReconnect(){return!0}",
-    "async connect(){let t={current:null},r=new n.kn(qae,{perMessageDeflate:!1,createConnection:()=>",
-    "(t.current=this.createSshProxyStream(),t.current)});r.once(`close`,()=>{t.current?.destroy()});try{await Xae(r)}catch(e){throw r.once(`error`,()=>void 0),t.current?.destroy(),r.terminate(),e}",
-    "let i=new n.On(r,void 0,8);return n.Dn(r,{onPongTimeout:()=>{i.reason=`timeout`,r.terminate()}}),this.hasConnected=!0,i}};",
-    "function b5(e){let t=_C(e.hostConfig);if(t)return v5.info(`[ssh-websocket-v0] selected app-server transport`),new gC(t);",
-    "if(e.transportKind===`remote-control`)return new Remote(e);",
-    "if(n.no(e.hostConfig))return new hoe({hostConfig:e.hostConfig,repoRoot:e.repoRoot,resourcesPath:e.resourcesPath,defaultOriginator:e.defaultOriginator});",
-    "let r=x5(e.hostConfig);if(r){e.desktopAuthAppServerClient;let t=vbe(e.hostConfig,r);return new n.Tn({hostConfig:e.hostConfig,websocketUrl:r,getWebsocketProtocols:void 0,...t==null?{}:{socksProxyUrl:t}})}",
-    "return new n.Cn({hostConfig:e.hostConfig,repoRoot:e.repoRoot,resourcesPath:e.resourcesPath,defaultOriginator:e.defaultOriginator,getConfigOverrides:async()=>[...await Ope(e)]})}function afterFactory(){}",
+    'class gC{options;kind="websocket";logger=(0,i.i)("AppServerTransportSshWebsocket");proxyStreams=new Set;hasConnected=!1;supportsReconnect(){return!0}',
+    'async connectToRemoteAppServer(e,t){return this.runWithSshStartupGate(async()=>{let t={current:null},h=(0,n.hd)(),r=new w.kn("ws://codex-app-server/rpc",{perMessageDeflate:!1,headers:h,createConnection:()=>',
+    "(t.current=this.createSshProxyStream(),t.current)}),o={current:null},a=e=>{o.current=o.current??e};r.on(\"error\",a);",
+    'let s=64;r.once("upgrade",e=>{let t=Number(e.headers["frame-limit"]);Number.isSafeInteger(t)&&t>0&&(s=t)});let c=new n.Codec(r,null!=h);r.once("close",()=>{t.current?.destroy()});',
+    "try{if(await opened(r),null!=o.current)throw o.current}catch(e){throw t.current?.destroy(),r.terminate(),e}",
+    'let i=new n.On(r,void 0,s,c);return r.off("error",a),this.logger.info("app_server_connection.compression_negotiated",{safe:{compression:c.compression}}),(0,n.Dn)(r,{onPongTimeout:()=>{i.terminationReason="pong_timeout",r.terminate()}}),this.hasConnected=!0,i})}}',
+    'let v5=(0,i.i)("WindowContext");function b5(e){let t=_C(e.hostConfig);if(t)return v5.info("[ssh-websocket-v0] selected app-server transport"),new gC(t);',
+    'if("remote-control"===e.transportKind)return new Remote(e);',
+    'if((0,n.no)(e.hostConfig))return new hoe({hostConfig:e.hostConfig,repoRoot:e.repoRoot,resourcesPath:e.resourcesPath,defaultOriginator:e.defaultOriginator});',
+    'let r=x5(e.hostConfig);if(r){e.desktopAuthAppServerClient;let t=vbe(e.hostConfig,r);return new n.Tn({hostConfig:e.hostConfig,websocketUrl:r,getWebsocketProtocols:void 0,...null==t?{}:{socksProxyUrl:t}})}',
+    'return new n.Cn({hostConfig:e.hostConfig,repoRoot:e.repoRoot,resourcesPath:e.resourcesPath,defaultOriginator:e.defaultOriginator,getConfigOverrides:async()=>[...await Ope(e)]})}function afterFactory(){}',
   ].join("");
 }
 
@@ -1461,6 +1468,23 @@ test("attached CLI verifier reports redacted failure categories", () => {
   }
 });
 
+test("attached CLI fixture cleanup does not wait for an already signaled writer", async () => {
+  const writer = spawn("bash", ["-c", 'IFS= read -r _; printf x'], {
+    stdio: ["pipe", "pipe", "ignore"],
+  });
+  const exited = once(writer, "exit");
+  const readerClosed = once(writer.stdout, "close");
+  writer.stdout.destroy();
+  await readerClosed;
+  writer.stdin.end("write\n");
+  const [code, signal] = await exited;
+  assert.equal(code, null);
+  assert.equal(signal, "SIGPIPE");
+  assert.equal(writer.exitCode, null);
+  assert.equal(writer.signalCode, "SIGPIPE");
+  await stopChild(writer, "SIGKILL");
+});
+
 for (const { name, owner = false, changes, accepted = false, retarget = false } of [
   { name: "accepts owner CPU accounting changes", owner: true, changes: { utime: "1" }, accepted: true },
   { name: "accepts authority scheduling changes", changes: { state: "R" }, accepted: true },
@@ -1511,10 +1535,7 @@ for (const { name, owner = false, changes, accepted = false, retarget = false } 
           overridePath: statPath,
         }),
       );
-      if (writer.exitCode == null) {
-        writer.kill("SIGKILL");
-        await once(writer, "exit");
-      }
+      await stopChild(writer, "SIGKILL");
       writer = null;
       assert.equal(result.code, accepted ? 0 : 1);
       assert.equal(result.signal, null);
@@ -1528,7 +1549,7 @@ for (const { name, owner = false, changes, accepted = false, retarget = false } 
         ]);
       }
     } finally {
-      if (writer != null && writer.exitCode == null) writer.kill("SIGKILL");
+      await stopChild(writer, "SIGKILL");
       removeAttachedCliFixture(fixture);
     }
   });
@@ -1715,7 +1736,15 @@ test("patch selects the bridge only for the local host and is idempotent", () =>
   const source = syntheticBundle();
   const patched = applySharedAppServerSocketPatch(source);
   assert.notEqual(patched, source);
-  assert.equal(applySharedAppServerSocketPatch(patched), patched);
+  const warnings = [];
+  const originalWarn = console.warn;
+  console.warn = (...args) => warnings.push(args.join(" "));
+  try {
+    assert.equal(applySharedAppServerSocketPatch(patched), patched);
+  } finally {
+    console.warn = originalWarn;
+  }
+  assert.deepEqual(warnings, [], "an already applied patch must not report drift");
   assert.match(patched, /CODEX_LINUX_APP_SERVER_BRIDGE_SOCKET/);
   assert.match(patched, /hostConfig\.kind===`local`/);
   assert.match(
@@ -1732,9 +1761,223 @@ test("patch selects the bridge only for the local host and is idempotent", () =>
   assert.match(patched, /reclaimStaleLock/);
   assert.match(patched, /this\.sameIdentity\(this\.socketIdentity,e\)/);
   assert.match(patched, /requires CODEX_CLI_PATH/);
-  assert.match(patched, /new n\.kn\(qae,/);
+  assert.match(patched, /WebSocket:w\.kn,MessageCodec:n\.Codec,ConnectionAdapter:n\.On,keepAlive:n\.Dn,url:"ws:\/\/codex-app-server\/rpc",maximumFrameBytes:64,maximumFrameHeader:"frame-limit"/);
+  assert.match(patched, /new w\.kn\("ws:\/\/codex-app-server\/rpc",/);
   assert.match(patched, /new n\.On\(/);
   assert.match(patched, /supportsReconnect\(\)\{return!0\}/);
+
+  const negotiated = source.replace(
+    'return r.off("error",a),this.logger.info("app_server_connection.compression_negotiated",',
+    'return this.logger.info("app_server_connection.compression_negotiated",',
+  );
+  assert.notEqual(applySharedAppServerSocketPatch(negotiated), negotiated);
+});
+
+// Distinct codec and connection adapter mirror the current upstream contract.
+// The codec deliberately has no readyState or close method.
+async function connectPatchedBundle(source = syntheticBundle(), {
+  bindings = {},
+  handshakeHeaders = { "frame-limit": "32" },
+  afterOpen = () => {},
+  diagnostics = {},
+} = {}) {
+  let socket;
+  let pongTimeout;
+  const stream = new PassThrough();
+  class WebSocket extends EventEmitter {
+    readyState = 0;
+    constructor(_url, options) {
+      super();
+      socket = this;
+      options.createConnection();
+      queueMicrotask(() => {
+        try {
+          this.emit("upgrade", { headers: handshakeHeaders });
+          this.readyState = 1;
+          this.emit("open");
+          afterOpen(this);
+        } catch (error) {
+          // Keep a broken generated handler from escaping the test runner.
+          // The public connect result must still reject the original error.
+          diagnostics.unhandledError = error;
+          this.terminate();
+        }
+      });
+    }
+    send(data) { this.sent = data; }
+    close(code, reason) {
+      this.readyState = 3;
+      this.emit("close", code, Buffer.from(reason));
+    }
+    terminate() { this.close(1006, "terminated"); }
+  }
+  class Codec {
+    constructor(ws, compressionOffered = false) {
+      this.compressionOffered = compressionOffered;
+      ws.on("upgrade", () => { this.sawUpgrade = true; });
+      this.ws = ws;
+      ws.on("message", data => this.handler?.(data));
+    }
+    setMessageHandler(handler) { this.handler = handler; }
+    send(data) { this.ws.send(data); }
+    finishSending() { return Promise.resolve(); }
+    finishReceiving() { return Promise.resolve(); }
+  }
+  class Adapter {
+    constructor(ws, _principal, maximumFrameBytes, codec) {
+      this.readyState = ws.readyState;
+      this.ws = ws;
+      this.maximumFrameBytes = maximumFrameBytes;
+      this.codec = codec;
+      codec.setMessageHandler(data => this.onmessage?.({ type: "message", data }));
+      ws.on("close", (code, reason) => {
+        codec.finishReceiving().then(() => {
+          this.readyState = ws.readyState;
+          this.onclose?.({ code, reason: reason.toString(), failureReason: this.terminationReason });
+        });
+      });
+    }
+    send(data) {
+      if (Buffer.byteLength(data) > this.maximumFrameBytes) throw new Error("frame too large");
+      this.codec.send(data);
+    }
+    close(code, reason) { return this.codec.finishSending().then(() => this.ws.close(code, reason)); }
+  }
+  const patched = applySharedAppServerSocketPatch(source);
+  assert.notEqual(patched, source);
+  const injected = patched.slice(patched.indexOf("class CodexLinuxSharedAppServerSocketTransport"), patched.indexOf("function b5(e)"));
+  const context = {
+    w: { kn: WebSocket },
+    n: { Codec, On: Adapter, Dn(ws, options) {
+      assert.equal(ws, socket, "keepalive must use the connection WebSocket");
+      diagnostics.keepAliveStarted = true;
+      pongTimeout = options.onPongTimeout;
+    } },
+    process, require, console, setTimeout, clearTimeout,
+  };
+  context["n$"] = context.n;
+  context["w$"] = context.w;
+  Object.assign(context, bindings);
+  diagnostics.stream = stream;
+  vm.runInNewContext(`${injected};globalThis.Transport=CodexLinuxSharedAppServerSocketTransport`, context);
+  const transport = new context.Transport("/unused/socket", async () => []);
+  transport.ensureAuthority = async () => {};
+  transport.createProxyStream = () => stream;
+  const connection = await transport.connect();
+  return { connection, socket, stream, pongTimeout };
+}
+
+test("patched current bundle returns an open connection adapter with codec message and close lifecycle", async () => {
+  const { connection, socket, stream } = await connectPatchedBundle();
+  assert.equal(connection.readyState, 1, "startup needs the returned connection to be open");
+  assert.equal(typeof connection.close, "function", "startup failure cleanup needs a connection close method");
+  assert.equal(connection.codec.compressionOffered, false);
+  assert.equal(connection.codec.sawUpgrade, true, "the codec must observe the handshake before open");
+  assert.equal(connection.maximumFrameBytes, 32, "preserve the proxy's advertised frame limit");
+  let received;
+  connection.onmessage = event => { received = event.data; };
+  socket.emit("message", "initialized");
+  assert.equal(received, "initialized");
+  connection.send("initialize");
+  assert.equal(socket.sent, "initialize");
+  assert.throws(() => connection.send("x".repeat(33)), /frame too large/);
+  const closed = new Promise(resolve => { connection.onclose = resolve; });
+  await connection.close(1000, "finished");
+  const event = await closed;
+  assert.equal(event.code, 1000);
+  assert.equal(connection.readyState, 3);
+  assert.equal(stream.destroyed, true);
+});
+
+test("patched connection reports pong timeout while releasing the proxy stream", async () => {
+  const { connection, stream, pongTimeout } = await connectPatchedBundle();
+  assert.equal(typeof connection.close, "function", "keepalive must target a connection adapter");
+  const closed = new Promise(resolve => { connection.onclose = resolve; });
+  pongTimeout();
+  assert.equal((await closed).failureReason, "pong_timeout");
+  assert.equal(stream.destroyed, true);
+});
+
+test("patch follows renamed minified bindings containing dollar signs", async () => {
+  const renamed = syntheticBundle().replace(/\b(n|w|r|i|s|c)\b/g, "$&$");
+  const { connection } = await connectPatchedBundle(renamed);
+  assert.equal(connection.readyState, 1);
+  await connection.close(1000, "finished");
+});
+
+test("handoff errors reject the connection before keepalive and release the proxy", async () => {
+  const failure = new Error("codec receive buffer failed");
+  const diagnostics = {};
+  await assert.rejects(
+    connectPatchedBundle(syntheticBundle(), {
+      diagnostics,
+      afterOpen(socket) { socket.emit("error", failure); },
+    }),
+    error => error === failure,
+  );
+  assert.equal(diagnostics.unhandledError, undefined);
+  assert.equal(diagnostics.keepAliveStarted, undefined);
+  assert.equal(diagnostics.stream.destroyed, true);
+});
+
+for (const { label, headers, expectedLimit } of [
+  { label: "inlined default frame limit", headers: {}, expectedLimit: 64 },
+  { label: "inlined frame header", headers: { "frame-limit": "32" }, expectedLimit: 32 },
+]) {
+  test(`generated transport preserves the ${label}`, async () => {
+    const { connection } = await connectPatchedBundle(syntheticBundle(), { handshakeHeaders: headers });
+    assert.equal(connection.readyState, 1);
+    connection.send("x".repeat(expectedLimit));
+    assert.throws(() => connection.send("x".repeat(expectedLimit + 1)), /frame too large/);
+    await connection.close(1000, "finished");
+  });
+}
+
+test("patch rejects handshake values held in method-local bindings", () => {
+  // A method-local name would not resolve from the injected class, so only
+  // inlined literals are accepted for the URL, frame limit, and header.
+  const cases = [
+    syntheticBundle().replace('new w.kn("ws://codex-app-server/rpc",', "new w.kn(url,"),
+    syntheticBundle().replace("let s=64;", "let s=limit;"),
+    syntheticBundle().replace('e.headers["frame-limit"]', "e.headers[header]"),
+  ];
+  const warnings = [];
+  const originalWarn = console.warn;
+  console.warn = (...args) => warnings.push(args.join(" "));
+  try {
+    for (const unsupported of cases) {
+      assert.notEqual(unsupported, syntheticBundle());
+      assert.equal(applySharedAppServerSocketPatch(unsupported), unsupported);
+    }
+  } finally {
+    console.warn = originalWarn;
+  }
+  assert.equal(warnings.length, cases.length);
+  assert.match(warnings.join("\n"), /SSH WebSocket transport/);
+});
+
+test("patch rejects ambiguous or disconnected codec and adapter lifecycles", () => {
+  const source = syntheticBundle();
+  const codec = "let c=new n.Codec(r,null!=h);";
+  const cases = [
+    source.replace(codec, `${codec}${codec}`),
+    source.replace(codec, "let c=new n.Codec(otherSocket,null!=h);"),
+    source.replace("new n.On(r,void 0,s,c)", "new n.On(r,void 0,s,otherCodec)"),
+    source.replace("this.hasConnected=!0,i})", "this.hasConnected=!0,c})"),
+    source.replace('i.terminationReason="pong_timeout"', 'otherAdapter.terminationReason="pong_timeout"'),
+  ];
+  const warnings = [];
+  const originalWarn = console.warn;
+  console.warn = (...args) => warnings.push(args.join(" "));
+  try {
+    for (const unsupported of cases) {
+      assert.notEqual(unsupported, source, "each case must change the upstream contract");
+      assert.equal(applySharedAppServerSocketPatch(unsupported), unsupported);
+    }
+  } finally {
+    console.warn = originalWarn;
+  }
+  assert.equal(warnings.length, cases.length);
 });
 
 test("durable hosts retain their upstream transport even when kind is local", () => {
@@ -1761,8 +2004,8 @@ test("patch rejects retired, duplicate, and mixed transport layouts", () => {
   const current = syntheticBundle();
   const patched = applySharedAppServerSocketPatch(current);
   const retired = current.replace(
-    "let i=new n.On(r,void 0,8);return n.Dn(r,{onPongTimeout:()=>{i.reason=`timeout`,r.terminate()}}),this.hasConnected=!0,i",
-    "return n.Dn(r,{onPongTimeout:()=>{r.terminate()}}),this.hasConnected=!0,new n.On(r)",
+    "let i=new n.On(r,void 0,s,c);",
+    "let i=new n.On(r,void 0,s);",
   );
 
   for (const source of [retired, current + current, current + patched, patched + patched]) {
@@ -1792,8 +2035,8 @@ test("patch leaves unsupported bundle shapes unchanged with a warning", () => {
 
 test("patch rejects a current transport whose semantic SSH anchor is missing", () => {
   const source = syntheticBundle().replace(
-    "class{options;kind=`websocket`;logger=i.i(`AppServerTransportSshWebsocket`);",
-    "class{kind=`websocket`;",
+    'class gC{options;kind="websocket";logger=(0,i.i)("AppServerTransportSshWebsocket");',
+    'class gC{kind="websocket";',
   );
   const warnings = [];
   const originalWarn = console.warn;
@@ -1844,6 +2087,45 @@ test("injected transport requires the captured config override callback", () => 
     /requires a config override callback/,
   );
 });
+
+test(
+  "patch applies to exactly one current signed main-process chunk",
+  { skip: process.env.CODEX_SIGNED_EXTRACTED_APP == null },
+  () => {
+    const buildDir = path.join(process.env.CODEX_SIGNED_EXTRACTED_APP, ".vite", "build");
+    const chunks = fs.readdirSync(buildDir)
+      .filter((name) => /^early-bootstrap(?:-\d+-[0-9a-f]{16})?\.js$/.test(name));
+    assert.ok(chunks.length > 0);
+    const results = [];
+    const originalWarn = console.warn;
+    console.warn = () => {};
+    try {
+      for (const name of chunks) {
+        const source = fs.readFileSync(path.join(buildDir, name), "utf8");
+        const patched = applySharedAppServerSocketPatch(source);
+        if (patched !== source) results.push({ name, patched });
+      }
+    } finally {
+      console.warn = originalWarn;
+    }
+    assert.equal(results.length, 1);
+    const [{ patched }] = results;
+    const warnings = [];
+    console.warn = (...args) => warnings.push(args.join(" "));
+    try {
+      assert.equal(applySharedAppServerSocketPatch(patched), patched);
+    } finally {
+      console.warn = originalWarn;
+    }
+    assert.deepEqual(warnings, []);
+    assert.match(
+      patched,
+      /\.call\(this,\{WebSocket:[\w$]+\.[\w$]+,MessageCodec:[\w$]+\.[\w$]+,ConnectionAdapter:[\w$]+\.[\w$]+,keepAlive:[\w$]+\.[\w$]+,url:"ws:\/\/codex-app-server\/rpc",maximumFrameBytes:0x[0-9a-f]+,maximumFrameHeader:"x-codex-websocket-max-unfragmented-message-bytes"\}\)/,
+    );
+    assert.match(patched, /return new CodexLinuxSharedAppServerSocketTransport\(process\.env\.CODEX_LINUX_APP_SERVER_BRIDGE_SOCKET,async\(\)=>\[/);
+    new vm.Script(patched, { filename: "patched-chunk.js" });
+  },
+);
 
 test("descriptor is optional and targets the main bundle", () => {
   assert.deepEqual(

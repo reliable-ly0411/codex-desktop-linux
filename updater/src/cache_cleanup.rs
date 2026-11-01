@@ -423,6 +423,10 @@ fn tree_bytes(path: &Path, dev: u64) -> Result<u64> {
     Ok(bytes)
 }
 
+// The prebuild pass only prunes downloaded package files after the verified
+// candidate has been bound to state. Workspace removal belongs exclusively to
+// clean(), whose transaction, recovery, process and mount guards must not be
+// bypassed by an upstream whole-workspace pruning path.
 pub fn prune(cache_root: &Path, state: &PersistedState) -> Result<usize> {
     let mut retained = BTreeSet::new();
     for path in [
@@ -818,4 +822,37 @@ mod tests {
         assert!(f.plan()?.targets.is_empty());
         Ok(())
     }
+    #[test]
+    fn prebuild_prune_never_expands_into_default_or_custom_workspaces() -> Result<()> {
+        let f = Fixture::new()?;
+        let ordinary = f.file("workspaces/stale/dist/unreferenced.deb")?;
+        let custom = write(&f._temp.path().join("custom-builds/workspaces/stale/data"))?;
+        let stale_download = f.file("packages/stale.deb")?;
+
+        assert_eq!(prune(&f.paths.cache_dir, &f.state)?, 1);
+        assert!(!stale_download.exists());
+        assert!(ordinary.is_file());
+        assert!(custom.is_file());
+        for retained in [
+            &f.state.artifact_paths.package_path,
+            &f.state.artifact_paths.rollback_package_path,
+            &f.state.artifact_paths.upstream_package_path,
+        ].into_iter().flatten() {
+            assert!(retained.is_file());
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn prebuild_missing_retained_path_aborts_before_deleting_downloads() -> Result<()> {
+        let mut f = Fixture::new()?;
+        let stale = f.file("packages/stale.deb")?;
+        f.state.artifact_paths.rollback_package_path =
+            Some(f.paths.cache_dir.join("packages/missing-rollback.deb"));
+
+        assert!(prune(&f.paths.cache_dir, &f.state).is_err());
+        assert!(stale.is_file());
+        Ok(())
+    }
+
 }
