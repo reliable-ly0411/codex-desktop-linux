@@ -15,7 +15,9 @@ This feature is disabled by default. Enable it before building:
 ```
 
 The feature is self-contained. It patches only the optional AppShots webview
-availability gate and the Electron main-process AppShots handlers. Upstream no
+availability gate and the Electron main-process `appshotCapture` service, which
+upstream builds only for macOS and Windows; on Linux its frontmost-window and
+capture methods route to the feature's helper. Upstream no
 longer ships the AppShots hotkey settings surface, so the feature does not
 patch or expose a Linux hotkey selector. It does not add AppShots-specific code
 to `computer-use-linux`, core patch modules, default patch flow, or packaged
@@ -23,8 +25,9 @@ runtime hooks.
 
 For window metadata and AT-SPI text, the feature shells out to the bundled
 Linux Computer Use backend's existing `windows` and `state` commands. For X11
-and i3, it first asks ImageMagick `import` to capture the selected window by
-its X11 window ID, which also works when the window is outside the primary
+and i3 windows that have an X11 window ID (native Wayland windows on Sway do
+not), it first asks ImageMagick `import` to capture the selected window by
+that ID, which also works when the window is outside the primary
 root-screenshot bounds. A direct window image uses its own image bounds,
 not the window's desktop coordinates. If that is unavailable, or for other
 desktop backends, it uses an available desktop screenshot CLI such as `grim`, `spectacle`,
@@ -56,7 +59,13 @@ Privacy and correctness constraints:
   the Electron environment does not inherit `HYPRLAND_INSTANCE_SIGNATURE`. On
   EWMH-compatible X11 window managers, the feature selects the topmost external
   window in stacking order. X11 and i3 captures also activate and verify the
-  target and restore focus before delivery. If verification or restoration
+  target and restore focus before delivery. The i3 backend also answers on
+  Sway: windows are focused by their decimal X11 id, or by `con_id` for a
+  native Wayland window, through `i3-msg`, or `swaymsg` when i3 is not
+  installed, on the IPC socket the backend uses. On Sway the target is the
+  topmost external window in Xwayland stacking order, which lists only
+  Xwayland windows; while a native Wayland window is open besides ChatGPT,
+  no target is offered. If verification or restoration
   fails, no attachment is delivered. Both paths skip ChatGPT and desktop portal windows.
   Other backends fail closed when they cannot provide a safe target.
 - Capture fails closed when no selected window or usable bounds are available.
