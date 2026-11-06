@@ -103,29 +103,18 @@ test("official Linux validation runs fully on every pull request but not hourly"
     signedBaseline,
     /"\$upstream_root\/usr\/lib\/chatgpt\/resources\/app\.asar"/,
   );
-  assert.match(signedBaseline, /function requireUniqueAsset\(pattern, description\)/);
-  assert.match(signedBaseline, /matches\.length !== 1/);
-  assert.match(
-    signedBaseline,
-    /requireUniqueAsset\(\/\^authed-route-\[A-Za-z0-9_-\]\+\\\.js\$\/, "authenticated route"\)/,
-  );
-  assert.match(
-    signedBaseline,
-    /requireUniqueAsset\(\/\^app-primary-\[A-Za-z0-9_-\]\+\\\.js\$\/, "primary application"\)/,
-  );
-  assert.doesNotMatch(
-    signedBaseline,
-    /["'](?:authed-route|app-primary)-[A-Za-z0-9_-]+\.js["']/,
-  );
+  assert.match(signedBaseline, /for \(const directory of \["", "async"\]\)/);
+  assert.match(signedBaseline, /expected rspack async webview chunks in webview\/assets\/async/);
+  assert.match(signedBaseline, /statically imports missing/);
+  assert.match(signedBaseline, /the import scan is stale/);
+  assert.match(signedBaseline, /webview chunks restored a static import cycle/);
+  assert.doesNotMatch(signedBaseline, /authed-route|app-primary/);
   assert.doesNotMatch(signedBaseline, /\b\d{2}\.\d{3}\.\d{5}\b/);
   assert.doesNotMatch(
     signedBaseline,
     /pool\/main\/c\/chatgpt\/chatgpt_[^\s"']+\.deb/,
   );
   assert.doesNotMatch(signedBaseline, /\b[0-9a-f]{64}\b/);
-  assert.match(signedBaseline, /!authed\.includes\(`\.\/\$\{primaryName\}`\)/);
-  assert.match(signedBaseline, /const authedFingerprint = authedName\.slice/);
-  assert.match(signedBaseline, /primary\.includes\(reverseMarker\)/);
   assert.match(
     signedBaseline,
     /name: Validate the Nix ELF contract against the official payload[\s\S]*?env:\n          CODEX_INSTALL_DIR:.*matrix\.architecture[\s\S]*?nix\/elf-runtime\.cjs fix[\s\S]*?nix\/elf-runtime\.cjs audit/,

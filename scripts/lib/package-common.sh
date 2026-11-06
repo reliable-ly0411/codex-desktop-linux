@@ -179,6 +179,10 @@ stage_update_builder_linux_features_tree() {
         [ -d "$source" ] || error "Missing enabled Linux feature: $feature_id ($source)"
         mkdir -p "$(dirname "$destination")"
         cp -a "$source" "$destination"
+        # Checkout umasks can make tracked executables group-writable. Keep
+        # private modes while preventing other users from changing build hooks.
+        find "$destination" -type d -exec chmod go-w {} +
+        find "$destination" -type f -perm /111 -exec chmod go-w {} +
         case "$relative_dir" in
             local/*) ;;
             *) remove_update_builder_test_files "$destination" ;;
@@ -334,6 +338,7 @@ render_desktop_entry() {
     local package_name
     local display_name
     local comment
+    local with_updater=0
     local rendered_target="$target.tmp"
 
     package_name="$(sed_escape_replacement "$PACKAGE_NAME")"
@@ -367,20 +372,15 @@ render_desktop_entry() {
                 print
             }
         ' "$DESKTOP_TEMPLATE" > "$rendered_target"
-    if package_with_updater_enabled; then
-        mv "$rendered_target" "$target"
-    else
-        awk '
-            /^\[Desktop Action CheckForUpdates\]$/ { skip = 1; next }
-            /^\[Desktop Action InstallReadyUpdate\]$/ { skip = 1; next }
-            /^\[/ { skip = 0 }
-            skip { next }
-            /^Actions=/ { next }
-            { print }
-        ' "$rendered_target" > "$target"
-        rm -f "$rendered_target"
-    fi
+    if package_with_updater_enabled; then with_updater=1; fi
+    filter_desktop_actions "$with_updater" < "$rendered_target" > "$target"
+    rm -f "$rendered_target"
     chmod 0644 "$target"
+}
+
+filter_desktop_actions() {
+    "$(package_node_binary)" "$REPO_DIR/packaging/linux/render-desktop-actions.js" \
+        "$APP_DIR/.codex-linux/patch-report.json" "$1"
 }
 
 resolve_package_icon_source() {
