@@ -7,7 +7,9 @@ use schemars::JsonSchema;
 use serde::Serialize;
 use std::{
     collections::HashMap,
-    env, fs, io,
+    env,
+    ffi::OsString,
+    fs, io,
     path::{Path, PathBuf},
     process::Command,
     time::Duration,
@@ -17,6 +19,15 @@ pub const UUID: &str = identity::GNOME_EXTENSION_UUID;
 const METADATA_JSON: &str = include_str!("../gnome-shell-extension/metadata.json");
 const EXTENSION_JS: &str = include_str!("../gnome-shell-extension/extension.js");
 const SYSTEM_EXTENSIONS_DIR: &str = "/usr/share/gnome-shell/extensions";
+/// metadata.json fields whose values GNOME Shell only displays. The Shell
+/// reads metadata.json when it loads an extension and imports extension.js
+/// once per session. It requires name and description to be strings and acts
+/// on uuid, shell-version, session-modes and version. The Extension base
+/// class reads uuid and gettext-domain, and name only as the getLogger
+/// prefix, which extension.js does not use. A change to these fields alone
+/// needs no reload.
+pub(crate) const DISPLAY_ONLY_METADATA: &[&str] =
+    &["name", "description", "url", "version-name", "donations"];
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 pub struct WindowTargetingSetupReport {
@@ -39,7 +50,15 @@ pub struct SetupCommandReport {
 pub async fn setup_window_targeting_report() -> WindowTargetingSetupReport {
     hydrate_session_bus_env();
 
-    let user_dir = extension_dir();
+    // A per-user copy GNOME Shell loaded names the Shell's own user
+    // extension dir. The host may set XDG_DATA_HOME differently, so this
+    // process's value is only the fallback.
+    let loaded = loaded_extension().await;
+    let user_dir = loaded
+        .as_ref()
+        .filter(|extension| extension.per_user)
+        .map(|extension| extension.path.clone())
+        .unwrap_or_else(extension_dir);
     let system_dir = Path::new(SYSTEM_EXTENSIONS_DIR).join(UUID);
     let system_installed = system_dir.join("metadata.json").is_file();
     let extension_dir = if system_installed {
@@ -50,6 +69,7 @@ pub async fn setup_window_targeting_report() -> WindowTargetingSetupReport {
     let extension_was_enabled = gnome_extension_enabled();
     let mut wrote_files = false;
     let mut changed_files = false;
+    let mut display_metadata_changed = false;
     let mut file_error = None;
     let mut removed_user_copy = false;
     if system_installed {
@@ -63,6 +83,7 @@ pub async fn setup_window_targeting_report() -> WindowTargetingSetupReport {
             Ok(report) => {
                 wrote_files = report.wrote_files;
                 changed_files = report.changed_files;
+                display_metadata_changed = report.display_metadata_changed;
             }
             Err(error) => file_error = Some(error),
         }
@@ -88,10 +109,9 @@ pub async fn setup_window_targeting_report() -> WindowTargetingSetupReport {
 
     // Enabling an extension does not replace the object cached by GNOME Shell.
     let system_reload_pending = if system_installed {
-        let loaded_path = loaded_extension_path().await;
         system_extension_requires_shell_reload(
             removed_user_copy,
-            loaded_path.as_deref(),
+            loaded.as_ref().map(|extension| extension.path.as_path()),
             &extension_dir,
         )
     } else {
@@ -109,10 +129,13 @@ pub async fn setup_window_targeting_report() -> WindowTargetingSetupReport {
         "Codex GNOME Shell extension files are available, but enabling the extension failed. Enable it with gnome-extensions after GNOME Shell sees the new extension."
             .to_string()
     } else if system_reload_pending {
-        "GNOME Shell must reload before the computer-use-linux system extension is active. Log out and back in so that GNOME Shell loads the system extension."
+        "GNOME Shell must reload before the Codex GNOME Shell extension is active. Log out and back in so that GNOME Shell loads the system extension."
             .to_string()
     } else if windows_error.is_none() && requires_shell_reload {
         shell_reload_message(extension_was_enabled).to_string()
+    } else if windows_error.is_none() && display_metadata_changed {
+        "Codex GNOME Shell extension is active and window targeting is available. Only its display metadata changed, which needs no reload."
+            .to_string()
     } else if windows_error.is_none() {
         "Codex GNOME Shell extension is active and window targeting is available.".to_string()
     } else {
@@ -134,7 +157,11 @@ pub async fn setup_window_targeting_report() -> WindowTargetingSetupReport {
 
 struct ExtensionWriteReport {
     wrote_files: bool,
+    /// extension.js changed, or a metadata.json field GNOME Shell acts on.
+    /// The running Shell keeps the old copy until it loads the extension again.
     changed_files: bool,
+    /// metadata.json changed in display-only fields and nothing else did.
+    display_metadata_changed: bool,
 }
 
 fn write_extension_files(extension_dir: &Path) -> Result<ExtensionWriteReport, String> {
@@ -142,8 +169,14 @@ fn write_extension_files(extension_dir: &Path) -> Result<ExtensionWriteReport, S
         .map_err(|error| format!("failed to create {}: {error}", extension_dir.display()))?;
     let metadata_json = render_extension_asset(METADATA_JSON);
     let extension_js = render_extension_asset(EXTENSION_JS);
-    let changed_files = file_content_changed(&extension_dir.join("metadata.json"), &metadata_json)
-        || file_content_changed(&extension_dir.join("extension.js"), &extension_js);
+    let installed_metadata = fs::read_to_string(extension_dir.join("metadata.json")).ok();
+    let metadata_changed = installed_metadata.as_deref() != Some(metadata_json.as_str());
+    let changed_files = file_content_changed(&extension_dir.join("extension.js"), &extension_js)
+        || (metadata_changed
+            && installed_metadata
+                .as_deref()
+                .is_none_or(|installed| metadata_needs_reload(installed, &metadata_json)));
+    let display_metadata_changed = metadata_changed && !changed_files;
 
     fs::write(extension_dir.join("metadata.json"), metadata_json).map_err(|error| {
         format!(
@@ -160,7 +193,26 @@ fn write_extension_files(extension_dir: &Path) -> Result<ExtensionWriteReport, S
     Ok(ExtensionWriteReport {
         wrote_files: true,
         changed_files,
+        display_metadata_changed,
     })
+}
+
+/// Whether two metadata.json texts differ outside the display-only fields.
+/// Text that is not a JSON object counts as a change.
+fn metadata_needs_reload(installed: &str, expected: &str) -> bool {
+    let load_fields = |text: &str| match serde_json::from_str(text) {
+        Ok(serde_json::Value::Object(mut fields)) => {
+            for field in DISPLAY_ONLY_METADATA {
+                fields.remove(*field);
+            }
+            Some(fields)
+        }
+        _ => None,
+    };
+    match (load_fields(installed), load_fields(expected)) {
+        (Some(installed), Some(expected)) => installed != expected,
+        _ => true,
+    }
 }
 
 fn remove_user_copy(extension_dir: &Path) -> Result<bool, String> {
@@ -174,10 +226,22 @@ fn remove_user_copy(extension_dir: &Path) -> Result<bool, String> {
     }
 }
 
-async fn loaded_extension_path() -> Option<PathBuf> {
+/// The copy of the extension GNOME Shell loaded.
+#[derive(Debug, PartialEq)]
+struct LoadedExtension {
+    path: PathBuf,
+    /// The Shell found it in its user extension dir, not a system one.
+    per_user: bool,
+}
+
+/// `ExtensionType.PER_USER` in GNOME Shell's `js/misc/extensionUtils.js`.
+/// `GetExtensionInfo` sends numbers as doubles.
+const PER_USER_EXTENSION: f64 = 2.0;
+
+async fn loaded_extension() -> Option<LoadedExtension> {
     tokio::time::timeout(Duration::from_secs(2), async {
         let connection = zbus::Connection::session().await.ok()?;
-        loaded_extension_path_on_connection(&connection)
+        loaded_extension_on_connection(&connection)
             .await
             .ok()
             .flatten()
@@ -187,9 +251,9 @@ async fn loaded_extension_path() -> Option<PathBuf> {
     .flatten()
 }
 
-async fn loaded_extension_path_on_connection(
+async fn loaded_extension_on_connection(
     connection: &zbus::Connection,
-) -> Result<Option<PathBuf>, zbus::Error> {
+) -> Result<Option<LoadedExtension>, zbus::Error> {
     let proxy = zbus::Proxy::new(
         connection,
         "org.gnome.Shell",
@@ -199,10 +263,15 @@ async fn loaded_extension_path_on_connection(
     .await?;
     let info: HashMap<String, zbus::zvariant::OwnedValue> =
         proxy.call("GetExtensionInfo", &(UUID,)).await?;
+    let per_user =
+        info.get("type").and_then(|value| f64::try_from(value).ok()) == Some(PER_USER_EXTENSION);
     Ok(info
         .get("path")
         .and_then(|value| <&str>::try_from(value).ok())
-        .map(PathBuf::from))
+        .map(|path| LoadedExtension {
+            path: PathBuf::from(path),
+            per_user,
+        }))
 }
 
 fn system_extension_requires_shell_reload(
@@ -343,6 +412,7 @@ fn enabled_extensions_literal(current: &str) -> Option<String> {
     if enabled_extensions_contains_uuid(trimmed) {
         return Some(trimmed.to_string());
     }
+
     let quoted = format!("'{UUID}'");
     let list = if trimmed == "@as []" { "[]" } else { trimmed };
     if list == "[]" {
@@ -398,10 +468,20 @@ fn output_detail(stdout: &[u8], stderr: &[u8], fallback: &str) -> String {
     fallback.to_string()
 }
 
+/// The user copy GNOME Shell loads: `extensions/UUID` under
+/// `g_get_user_data_dir()/gnome-shell`.
 fn extension_dir() -> PathBuf {
-    let home = env::var("HOME").unwrap_or_else(|_| ".".to_string());
-    PathBuf::from(home)
-        .join(".local/share/gnome-shell/extensions")
+    user_extension_dir(env::var_os("XDG_DATA_HOME"), env::var_os("HOME"))
+}
+
+/// GLib's user data dir is `XDG_DATA_HOME` when it is set and not empty,
+/// else `HOME/.local/share`.
+fn user_extension_dir(data_home: Option<OsString>, home: Option<OsString>) -> PathBuf {
+    data_home
+        .filter(|dir| !dir.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(home.unwrap_or_else(|| ".".into())).join(".local/share"))
+        .join("gnome-shell/extensions")
         .join(UUID)
 }
 
@@ -487,6 +567,67 @@ mod tests {
         let third = write_extension_files(&extension_dir.0).unwrap();
         assert!(third.wrote_files);
         assert!(third.changed_files);
+        assert!(!third.display_metadata_changed);
+    }
+
+    #[test]
+    fn only_display_metadata_changes_skip_the_reload() {
+        let expected = render_extension_asset(METADATA_JSON);
+        let fields: serde_json::Map<String, serde_json::Value> =
+            serde_json::from_str(&expected).unwrap();
+        let with = |edit: &dyn Fn(&mut serde_json::Map<String, serde_json::Value>)| {
+            let mut edited = fields.clone();
+            edit(&mut edited);
+            serde_json::to_string(&edited).unwrap()
+        };
+        // 0.7.43 had no url; key order and layout do not matter either.
+        assert!(!metadata_needs_reload(
+            &with(&|m| {
+                m.remove("url");
+            }),
+            &expected
+        ));
+        assert!(!metadata_needs_reload(
+            &with(&|m| {
+                m.insert("name".into(), "Old name".into());
+                m.insert("description".into(), "Old text".into());
+                m.insert("version-name".into(), "0.1".into());
+            }),
+            &expected
+        ));
+        assert!(metadata_needs_reload(
+            &with(&|m| {
+                m.insert("shell-version".into(), serde_json::json!(["45"]));
+            }),
+            &expected
+        ));
+        assert!(metadata_needs_reload(
+            &with(&|m| {
+                m.insert("session-modes".into(), serde_json::json!(["user"]));
+            }),
+            &expected
+        ));
+        assert!(metadata_needs_reload(
+            &with(&|m| {
+                m.insert("version".into(), 2.into());
+            }),
+            &expected
+        ));
+        assert!(metadata_needs_reload("{", &expected));
+        assert!(metadata_needs_reload("[]", &expected));
+    }
+
+    #[test]
+    fn extension_reads_no_display_metadata() {
+        // DISPLAY_ONLY_METADATA holds only while extension.js reads no
+        // metadata itself and never logs through getLogger, whose prefix is
+        // the name.
+        for reader in ["metadata", "getLogger"] {
+            assert!(
+                !EXTENSION_JS.contains(reader),
+                "extension.js uses {reader}; check DISPLAY_ONLY_METADATA"
+            );
+        }
     }
 
     #[test]
@@ -497,6 +638,18 @@ mod tests {
         assert!(remove_user_copy(&extension_dir.0).unwrap());
         assert!(!extension_dir.0.exists());
         assert!(!remove_user_copy(&extension_dir.0).unwrap());
+    }
+
+    #[test]
+    fn user_copy_falls_back_to_home_when_xdg_data_home_is_unset_or_empty() {
+        let home = || Some(OsString::from("/home/u"));
+        let fallback = Path::new("/home/u/.local/share/gnome-shell/extensions").join(UUID);
+        assert_eq!(user_extension_dir(None, home()), fallback);
+        assert_eq!(user_extension_dir(Some("".into()), home()), fallback);
+        assert_eq!(
+            user_extension_dir(Some("/data".into()), home()),
+            Path::new("/data/gnome-shell/extensions").join(UUID)
+        );
     }
 
     struct FakeShellExtensions {
@@ -518,32 +671,12 @@ mod tests {
 
     #[tokio::test]
     async fn system_migration_keeps_reload_warning_until_shell_changes_loaded_path() {
-        use std::io::{BufRead, BufReader};
-        use std::process::Stdio;
-
-        struct PrivateBus(std::process::Child);
-        impl Drop for PrivateBus {
-            fn drop(&mut self) {
-                let _ = self.0.kill();
-                let _ = self.0.wait();
-            }
-        }
-        let mut bus = PrivateBus(
-            Command::new("dbus-daemon")
-                .args(["--session", "--nofork", "--nopidfile", "--print-address=1"])
-                .stdout(Stdio::piped())
-                .spawn()
-                .unwrap(),
-        );
-        let mut address = String::new();
-        BufReader::new(bus.0.stdout.take().unwrap())
-            .read_line(&mut address)
-            .unwrap();
+        let bus = crate::test_sockets::PrivateBus::start("cul-ext-bus");
         let user_dir = TestExtensionDirectory::new();
         write_extension_files(&user_dir.0).unwrap();
         let system_dir = Path::new(SYSTEM_EXTENSIONS_DIR).join(UUID);
         let path = std::sync::Arc::new(std::sync::Mutex::new(user_dir.0.clone()));
-        let _service = zbus::connection::Builder::address(address.trim())
+        let _service = zbus::connection::Builder::address(bus.address())
             .unwrap()
             .name("org.gnome.Shell")
             .unwrap()
@@ -555,14 +688,17 @@ mod tests {
             .build()
             .await
             .unwrap();
-        let client = zbus::connection::Builder::address(address.trim())
+        let client = zbus::connection::Builder::address(bus.address())
             .unwrap()
             .build()
             .await
             .unwrap();
 
         let removed = remove_user_copy(&user_dir.0).unwrap();
-        let loaded = loaded_extension_path_on_connection(&client).await.unwrap();
+        let loaded = loaded_extension_on_connection(&client)
+            .await
+            .unwrap()
+            .map(|extension| extension.path);
         assert_eq!(loaded.as_deref(), Some(user_dir.0.as_path()));
         assert!(system_extension_requires_shell_reload(
             removed,
@@ -572,14 +708,20 @@ mod tests {
 
         let removed = remove_user_copy(&user_dir.0).unwrap();
         assert!(!removed);
-        let loaded = loaded_extension_path_on_connection(&client).await.unwrap();
+        let loaded = loaded_extension_on_connection(&client)
+            .await
+            .unwrap()
+            .map(|extension| extension.path);
         assert!(
             system_extension_requires_shell_reload(removed, loaded.as_deref(), &system_dir),
             "a second setup before Shell restarts must retain the reload warning"
         );
 
         *path.lock().unwrap() = system_dir.clone();
-        let loaded = loaded_extension_path_on_connection(&client).await.unwrap();
+        let loaded = loaded_extension_on_connection(&client)
+            .await
+            .unwrap()
+            .map(|extension| extension.path);
         assert!(!system_extension_requires_shell_reload(
             false,
             loaded.as_deref(),

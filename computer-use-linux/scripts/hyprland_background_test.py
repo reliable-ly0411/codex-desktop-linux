@@ -27,6 +27,8 @@ import time
 import unittest
 import zlib
 
+from socket_fixture import INDICATOR_SOCKET, TEMPDIR_NAME, private_bus_config, socket_tempdir
+
 SERVER = str(Path(sys.argv[1]).resolve())
 TARGET = 0x5000
 FOCUSED = 0x6000
@@ -198,7 +200,7 @@ class BackgroundModeTests(unittest.TestCase):
         """Binds the overlay socket so the server's indicator events land here."""
         self.env.pop('COMPUTER_USE_LINUX_INDICATOR')
         overlay = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
-        overlay.bind(str(self.root/'computer-use-linux-indicator.sock'))
+        overlay.bind(str(self.root/INDICATOR_SOCKET))
         overlay.settimeout(5)
         self.addCleanup(overlay.close)
         return overlay
@@ -329,13 +331,11 @@ if __name__ == '__main__':
     if len(sys.argv) > 2 and sys.argv[2] == '--private':
         result = unittest.main(argv=[sys.argv[0]], exit=False).result
         raise SystemExit(0 if result.wasSuccessful() else 1)
-    with tempfile.TemporaryDirectory(prefix='cul-hyprland-bg-') as directory:
+    # Each test's directory holds the overlay socket, the longest one here.
+    with socket_tempdir('cul-hypr-bg-', [f'{TEMPDIR_NAME}/{INDICATOR_SOCKET}'],
+                        bus_dir='') as directory:
         env = dict(os.environ, XDG_RUNTIME_DIR=directory)
-        config = Path(directory)/'bus.conf'
-        config.write_text('<busconfig><type>session</type>'
-            f'<listen>unix:tmpdir={directory}</listen>'
-            '<policy context="default"><allow own="*"/>'
-            '<allow send_destination="*"/><allow receive_sender="*"/></policy></busconfig>')
+        config = private_bus_config(Path(directory)/'bus.conf', directory)
         proc = subprocess.Popen(['dbus-run-session', '--config-file', str(config), '--', '/usr/bin/python3',
             __file__, SERVER, '--private', directory], env=env, start_new_session=True)
         try:

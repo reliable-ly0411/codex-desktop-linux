@@ -471,6 +471,9 @@ fn temporary_kwin_plugin_name() -> Result<String> {
     Ok(format!("codex_kwin_window_query_{pid}_{sequence}_{nonce}"))
 }
 
+/// Take the next plugin sequence number. An exhausted counter stays at
+/// `u64::MAX` and every later call fails, where `fetch_add` would wrap it to
+/// 0 and hand out used numbers again.
 fn next_kwin_plugin_sequence(counter: &AtomicU64) -> Result<u64> {
     let mut current = counter.load(Ordering::Relaxed);
     loop {
@@ -1838,7 +1841,10 @@ mod adapter_tests {
             next_kwin_plugin_sequence(&counter).unwrap_err().to_string(),
             "temporary KWin plugin sequence exhausted"
         );
+        // An exhausted counter stays exhausted instead of wrapping to 0 and
+        // handing out sequence numbers again.
         assert_eq!(counter.load(Ordering::Relaxed), u64::MAX);
+        assert!(next_kwin_plugin_sequence(&counter).is_err());
     }
 
     #[test]
@@ -2555,10 +2561,9 @@ mod callback_tests {
 #[cfg(test)]
 mod transaction_tests {
     use super::*;
+    use crate::test_sockets::PrivateBus;
     use std::{
         future::pending,
-        io::{BufRead, BufReader},
-        process::{Child, Command, Stdio},
         sync::{
             atomic::{AtomicUsize, Ordering},
             Arc, Mutex,
@@ -2606,44 +2611,12 @@ mod transaction_tests {
         }
     }
 
-    struct TestSessionBus {
-        child: Child,
-        address: String,
-    }
-
-    impl TestSessionBus {
-        fn start() -> Self {
-            let mut child = Command::new("dbus-daemon")
-                .args(["--session", "--nofork", "--nopidfile", "--print-address=1"])
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .spawn()
-                .expect("start private dbus-daemon");
-            let mut address = String::new();
-            BufReader::new(child.stdout.take().expect("private bus stdout"))
-                .read_line(&mut address)
-                .expect("read private bus address");
-            assert!(!address.trim().is_empty(), "private bus emitted no address");
-            Self {
-                child,
-                address: address.trim().to_string(),
-            }
-        }
-    }
-
-    impl Drop for TestSessionBus {
-        fn drop(&mut self) {
-            let _ = self.child.kill();
-            let _ = self.child.wait();
-        }
-    }
-
     async fn assert_transaction_timeout_cleans_up(behavior: FakeKwinBehavior) {
-        let bus = TestSessionBus::start();
+        let bus = PrivateBus::start("cul-kwin-bus");
         let load_calls = Arc::new(AtomicUsize::new(0));
         let start_calls = Arc::new(AtomicUsize::new(0));
         let unload_calls = Arc::new(AtomicUsize::new(0));
-        let service_connection = zbus::connection::Builder::address(bus.address.as_str())
+        let service_connection = zbus::connection::Builder::address(bus.address())
             .unwrap()
             .name(KWIN_SCRIPTING_SERVICE)
             .unwrap()
@@ -2660,7 +2633,7 @@ mod transaction_tests {
             .build()
             .await
             .unwrap();
-        let client_connection = zbus::connection::Builder::address(bus.address.as_str())
+        let client_connection = zbus::connection::Builder::address(bus.address())
             .unwrap()
             .build()
             .await
@@ -2720,11 +2693,11 @@ mod transaction_tests {
 
     #[tokio::test]
     async fn duplicate_callback_path_fails_without_disturbing_its_owner() {
-        let bus = TestSessionBus::start();
+        let bus = PrivateBus::start("cul-kwin-bus");
         let load_calls = Arc::new(AtomicUsize::new(0));
         let start_calls = Arc::new(AtomicUsize::new(0));
         let unload_calls = Arc::new(AtomicUsize::new(0));
-        let service_connection = zbus::connection::Builder::address(bus.address.as_str())
+        let service_connection = zbus::connection::Builder::address(bus.address())
             .unwrap()
             .name(KWIN_SCRIPTING_SERVICE)
             .unwrap()
@@ -2741,7 +2714,7 @@ mod transaction_tests {
             .build()
             .await
             .unwrap();
-        let client_connection = zbus::connection::Builder::address(bus.address.as_str())
+        let client_connection = zbus::connection::Builder::address(bus.address())
             .unwrap()
             .build()
             .await
