@@ -7,6 +7,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Added
 
+- Synchronize the embedded Computer Use backend to standalone v0.7.48.
+  `get_app_state`, `include_tree` observations and `get_tree_page` return a
+  `snapshot_id`. `click`, `scroll`, `perform_action`, `set_value` and
+  `get_tree_page` take it, and a call that picks its element by
+  `element_index` or selector and names a replaced snapshot is refused before
+  any window is raised or input is sent. A coordinate scroll on Wayland sends
+  the wheel from the uinput absolute pointer that moved the pointer, so GNOME
+  no longer drops it for XWayland windows, and the route needs no ydotool
+  daemon. `left` and `right` scroll the way they say on the uinput and
+  ydotool routes. `scroll` checks the target app's ownership of an
+  `element_index` when the call passes only `x` or only `y`. The host bridge
+  pages a large tree with its `snapshot_id`, so a tree replaced while it is
+  paged comes back marked partial instead of mixing two trees.
 - Synchronize the embedded Computer Use backend to standalone v0.7.47.
   `setup_window_targeting` and `setup-window-targeting` install the user copy
   of the Codex GNOME Shell extension in `$XDG_DATA_HOME/gnome-shell/extensions`,
@@ -256,6 +269,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- Synchronize the embedded Computer Use backend to standalone v0.7.49: its
+  `rmcp` goes from 3.5.1 to 3.9.0, which clears RUSTSEC-2026-0457, -0461 and
+  -0462 for the backend. Tool output schemas now list nullable fields as
+  required, as `rmcp` 3.9.0 generates them. The backend already sent those
+  fields as `null`, so results are unchanged. The `rmcp` 1.5.0 that Read Aloud
+  and Record & Replay use is not part of this sync and is still in the range
+  of RUSTSEC-2026-0462; like the backend they build the stdio transport only,
+  not the HTTP client transports the advisory is about.
 - A successful pixelflux click, scroll or drag in a Selkies container
   notifies the Codex avatar cursor, as the other pointer routes do. These
   routes had skipped it since the pixelflux backend arrived.
@@ -319,10 +340,40 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   fixtures move to `XDG_RUNTIME_DIR` when a socket path would not fit under
   `TMPDIR`, so the suite passes with a long `TMPDIR` too; without
   `XDG_RUNTIME_DIR` they fail with the limit and the path.
-  `scripts/ci/run-node-checks.sh`, a standalone script that runs the
-  `*.test.js` files and the feature `test.js` files, now runs them with a
-  fresh `TMPDIR` and fails, naming the entries, when a run leaves any. CI and
-  `scripts/ci-local.sh` run their own lists of Node tests and do not use it.
+  `scripts/ci/run-node-checks.sh all` syntax-checks every tracked `.js` file,
+  then runs every `*.test.js` and `test.js` with a fresh `TMPDIR` and fails,
+  naming the entries, when a run leaves any. CI's Node step runs it, so CI
+  runs exactly the files the guard checks; `scripts/ci-local.sh` still runs
+  its own list. The GNOME dictation and package permission tests keep their
+  scratch under `TMPDIR` too, and the shared app-server tests bind their
+  sockets inside the `try` that removes them. The host-service tests wait for
+  their detached bridge to exit and kill it if it still runs after 3 s. The
+  Dock icon lock test's holder keeps the lock only while the test holds its
+  stdin open. The runner does not pass `--test-force-exit`. That flag can drop
+  finished tests from the report and still exit 0 (nodejs/node#64833). With
+  it, 8 of 11 local runs on Node 24 and 26 reported up to 47 fewer tests than
+  ran. A file that a leaked handle holds open fails the run with status 124
+  when the runner's 300 s `timeout` watchdog ends it. CI requires `timeout`; a
+  local run without it has no limit.
+- The AppShots bare modifier monitor waits for `xinput --version` before it
+  starts its XInput 2 stream, and reports `permission-denied` when the X
+  server cannot be reached or has no XInput 2. Before, it judged the stream
+  by whether it still ran 0.1 s after the start, so under load a failing
+  `xinput` could print `ready` and then stop. SIGTERM or the app's exit
+  still ends the monitor and the check while it waits. A stream that exits
+  before the monitor reads its coprocess also gives `permission-denied`;
+  before, the monitor stopped with an unbound-variable error and no output.
+- The global dictation release watcher stops each helper subshell, signals
+  its children, then ends the subshell with SIGKILL. A child that a subshell
+  forked between `pkill -P` and its own end, such as the watchdog's `sleep`,
+  no longer outlives the watcher. A second SIGINT, SIGTERM or SIGHUP during
+  cleanup no longer cuts it short, which left the helpers running.
+- The embedded Computer Use crate's
+  `editable_text_normalization_mismatch_is_not_verified` test accepts
+  `ReadbackTimedOut` as well as `MismatchAfterDeadline`, like the two other
+  mismatch tests (agent-sh/computer-use-linux#431). Its last poll can start
+  just before the one-second deadline and still be reading when it passes.
+  Both outcomes leave the write unverified, and neither allows a replay.
 - Desktop entries no longer offer a "New Window" action. It relied on the
   retired multi-instance launcher (`--new-instance`, `CODEX_MULTI_LAUNCH`),
   which the official app ignores, so it did nothing while the app was running
