@@ -33,8 +33,19 @@ The upstream README explicitly limits its MIT license to wrapper source,
 packaging, documentation and community-owned extensions, and does not grant
 rights to the official payload. No payload redistribution permission evidence
 has yet been verified. `community-release-policy.json` therefore has an empty
-`redistributionApprovals` list and package build/upload/publication fails closed.
+`redistributionApprovals` list and package download/build/upload/publication remains blocked.
 Official signatures prove package origin, not redistribution permission.
+
+After successful source synchronization and signed-metadata/history verification,
+missing permission evidence is an expected pause, not a build failure. The plan
+reports **同步成功、发布因许可证据不足而暂停** (source synchronization succeeded;
+publication paused because permission evidence is missing), sets `build=false`
+and `release_status=paused_license`, and creates no build plan. No payload is
+downloaded, built, uploaded or published. This successful no-build outcome does
+not mean a package was built or that release permission was granted. Invalid
+signatures/hashes, malformed policy/history, downgrade or same-version payload
+drift, pending-draft recovery, sync failures and other genuine errors still fail.
+The final publisher independently requires exact-payload permission as before.
 
 To resolve this blocker, review an actual rights-holder permission source for
 repackaging and public redistribution. A reviewed, committed approval entry must

@@ -6,7 +6,7 @@ const crypto = require("node:crypto");
 const { execFileSync } = require("node:child_process");
 const { resolveOfficialPackage, verifyIndexedFile } = require("../lib/upstream-linux-package.js");
 const { chooseRelease, completeRelease, publish } = require("./community-build-release.js");
-const { officialIdentity, requireLicense, checkPackageUpdate, verifyPublishedHistory, POLICY } = require("./community-official-trigger.js");
+const { officialIdentity, requireLicense, MissingRedistributionPermissionError, checkPackageUpdate, verifyPublishedHistory, POLICY } = require("./community-official-trigger.js");
 const REPOSITORY = "https://persistent.oaistatic.com/codex-app-prod/linux/deb";
 const digest = (input) => crypto.createHash("sha256").update(input).digest("hex");
 
@@ -71,7 +71,18 @@ async function main() {
       summary("Official package already observed in verified baseline/history; no historical backfill.");
       return;
     }
-    const licenseEvidence = requireLicense(policy, metadata);
+    let licenseEvidence;
+    try {
+      licenseEvidence = requireLicense(policy, metadata);
+    } catch (error) {
+      // Only missing exact-payload permission is an expected pause. Signature,
+      // history, policy, API and other errors must still fail the workflow.
+      if (!(error instanceof MissingRedistributionPermissionError)) throw error;
+      fs.rmSync(planFile, { force: true });
+      fs.appendFileSync(process.env.GITHUB_OUTPUT, "build=false\nrelease_status=paused_license\n");
+      summary(`### 同步成功、发布因许可证据不足而暂停\n\nSource synchronization succeeded; publication paused because redistribution permission evidence is missing for this exact payload.\n\nArchitecture: \`${arch}\`\n\nOfficial version: \`${metadata.version}\`\n\nSource: \`${source}\`\n\nOfficial SHA-256: \`${metadata.sha256}\`\n\nSigned metadata and release history were verified. No package payload was downloaded, built, uploaded or published. The license gate remains enforced; an exact-payload permission review is required before release.`);
+      return;
+    }
     const features = fs.readFileSync(process.env.CODEX_LINUX_FEATURES_CONFIG);
     const key = identity(source, metadata, features);
     const artifactName = `community-deb-${arch}-${key}`;

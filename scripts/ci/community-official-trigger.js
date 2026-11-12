@@ -16,16 +16,26 @@ function officialIdentity(metadata) {
     package:metadata.package,version:metadata.version,architecture:metadata.architecture,
     sha256:metadata.sha256})).digest("hex");
 }
+class MissingRedistributionPermissionError extends Error {
+  constructor() {
+    super("Redistribution permission evidence not verified for this exact payload; publication blocked");
+    this.name = "MissingRedistributionPermissionError";
+  }
+}
 function requireLicense(policy, metadata) {
   officialIdentity(metadata);
-  const evidence = policy.redistributionApprovals?.find(e => e.packageSha256 === metadata.sha256
+  if (!Array.isArray(policy.redistributionApprovals)
+      || policy.redistributionApprovals.some(e => !e || typeof e !== "object" || Array.isArray(e))) {
+    throw Error("Invalid redistribution approvals policy");
+  }
+  const evidence = policy.redistributionApprovals.find(e => e.packageSha256 === metadata.sha256
     && e.architecture === metadata.architecture && e.version === metadata.version
     && e.permission === "redistribute-repackaged-payload" && typeof e.reviewedBy === "string"
     && e.reviewedBy.trim() && /^https:\/\//.test(e.evidenceUrl || ""));
-  if (!evidence) throw Error("Redistribution permission evidence not verified for this exact payload; publication blocked");
+  if (!evidence) throw new MissingRedistributionPermissionError();
   return evidence;
 }
-module.exports = { officialIdentity, requireLicense, POLICY, REPOSITORY };
+module.exports = { officialIdentity, requireLicense, MissingRedistributionPermissionError, POLICY, REPOSITORY };
 
 // Debian version ordering, not lexical or semver ordering (epochs/revisions count).
 function compareVersions(a, b) {

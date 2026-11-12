@@ -107,11 +107,14 @@ jobs:
           node-version: 24
       - name: Prepare runner-local build state
         run: echo "BUILD_STATE_DIR=$RUNNER_TEMP/community-build-$BUILD_ARCH" >> "$GITHUB_ENV"
-      - name: Verify signed metadata and check published Releases
+      - name: Verify signed metadata and determine publication readiness
         id: plan
         env:
           GH_TOKEN: ${{ github.token }}
         run: node scripts/ci/community-build.js plan
+      - name: 同步成功、发布因许可证据不足而暂停
+        if: steps.plan.outputs.release_status == 'paused_license'
+        run: echo '::notice title=Publication paused::Source synchronization succeeded; exact-payload redistribution permission evidence is missing. No package was downloaded, built, uploaded or published.'
       - uses: dtolnay/rust-toolchain@56f84321dbccf38fb67ce29ab63e4754056677e0
         if: steps.plan.outputs.build == 'true'
         with:

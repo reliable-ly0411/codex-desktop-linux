@@ -105,3 +105,10 @@ test("wrong repository and mismatched provenance cannot publish", () => {
     assert.equal(calls.length, 0);
   });
 });
+test("publication still rejects missing permission before any GitHub operation", () => {
+  fixture("new", ({ plan, env, io, calls }) => {
+    io.policy.redistributionApprovals = [];
+    assert.throws(() => publish(plan, env, io), /Redistribution permission evidence not verified/);
+    assert.equal(calls.length, 0);
+  });
+});
